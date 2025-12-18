@@ -32,12 +32,8 @@ This script will:
 
 ### Manual Installation
 
-If you prefer to install manually:
-
 1. Navigate to the project directory:
-   ```bash
-   cd /home/richard/linker-hand-controller
-   ```
+   
 
 2. Create a virtual environment (recommended):
    ```bash
@@ -76,13 +72,23 @@ Edit LinkerHand/config/setting.yaml to match your setup.
    ```bash
    python3 l20_controller_gui.py
    ```
-
-   Or run the command-line version without GUI:
-   ```bash
-   python3 l20_controller.py
-   ```
+ 
 
 4. In the GUI:
    - Click **Start Controller** to begin
    - Use **Calibrate MIN** (open hand) and **Calibrate MAX** (closed hand) for better accuracy
    - The display shows real-time joint angles and motor values
+
+## Closing a Stuck GUI Window
+
+If you terminate the app but the window stays open, find the process and kill it:
+
+```bash
+pgrep -af l20_controller_gui.py
+```
+
+Then stop it:
+
+```bash
+kill -9 <PID>
+```

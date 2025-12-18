@@ -1,25 +1,13 @@
 # L20 Hand Controller Package
 
-This package contains the control logic for the L20 Linker Hand.
+This package contains the core logic for the L20 Linker Hand, used by the GUI application.
 
 ## Structure
 
-- `controller.py`: Main control loop and orchestration `L20Controller` class.
 - `kinematics.py`: Hand-specific geometric calculations and joint angle logic.
 - `math_utils.py`: Generic 3D vector math helper functions.
-- `network.py`: ZMQ communication and message parsing.
-- `main.py`: Entry point for running the controller directly.
+- `network.py`: ZMQ communication utilities and message parsing.
 
 ## Usage
 
-You can run the controller from the project root:
-
-```bash
-python3 l20_controller.py
-```
-
-Or run the module directly:
-
-```bash
-python3 -m l20_controller.main
-```
+This package is intended to be used as a library by other applications (like `l20_controller_gui.py`).
