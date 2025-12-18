@@ -1,0 +1,5 @@
+pyzmq
+python-can
+numpy
+PyYAML
+pyserial
