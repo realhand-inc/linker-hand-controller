@@ -31,7 +31,6 @@ try:
     from l20_controller import (
         calculate_all_joint_angles,
         parse_landmarks,
-        angles_to_l20_pose,
     )
 except ImportError:
     print("Error: Could not import from l20_controller.py")
@@ -40,64 +39,80 @@ except ImportError:
 
 
 class CalibrationData:
-    """Stores min/max calibration values for each joint."""
+    """Stores min/max calibration values for each motor."""
 
     def __init__(self):
-        self.joint_names = [
-            'thumb_cmc_abd', 'thumb_cmc_flex', 'thumb_mcp', 'thumb_ip',
-            'index_mcp', 'index_pip', 'index_dip',
-            'middle_mcp', 'middle_pip', 'middle_dip',
-            'ring_mcp', 'ring_pip', 'ring_dip',
-            'pinky_mcp', 'pinky_pip', 'pinky_dip',
+        # Complete L20 motor list (20 motors, indices 0-19)
+        self.motor_names = [
+            # Base flexion (0-4)
+            'thumb_base',      # 0
+            'index_base',      # 1
+            'middle_base',     # 2
+            'ring_base',       # 3
+            'pinky_base',      # 4
+
+            # Abduction/Spread (5-9)
+            'thumb_abduction', # 5
+            'index_spread',    # 6
+            'middle_spread',   # 7
+            'ring_spread',     # 8
+            'pinky_spread',    # 9
+
+            # Thumb yaw + Reserved (10-14)
+            'thumb_yaw',       # 10
+            'reserved_11',     # 11
+            'reserved_12',     # 12
+            'reserved_13',     # 13
+            'reserved_14',     # 14
+
+            # Tip flexion (15-19)
+            'thumb_tip',       # 15
+            'index_tip',       # 16
+            'middle_tip',      # 17
+            'ring_tip',        # 18
+            'pinky_tip',       # 19
         ]
 
-        # Initialize with default ranges (0 to π radians)
-        self.min_values: Dict[str, float] = {name: 0.0 for name in self.joint_names}
-        self.max_values: Dict[str, float] = {name: math.pi for name in self.joint_names}
-
-        # Special ranges for thumb CMC joints
-        self.max_values['thumb_cmc_abd'] = math.pi / 2
-        self.max_values['thumb_cmc_flex'] = math.pi / 2
+        # Initialize with default ranges (0 to π radians for all motors)
+        self.min_values: Dict[str, float] = {name: 0.0 for name in self.motor_names}
+        self.max_values: Dict[str, float] = {name: math.pi for name in self.motor_names}
 
     def calibrate_min(self, current_angles: Dict[str, float]):
         """Set current angles as minimum calibration values."""
-        for name in self.joint_names:
+        for name in self.motor_names:
             if name in current_angles:
                 self.min_values[name] = current_angles[name]
 
     def calibrate_max(self, current_angles: Dict[str, float]):
         """Set current angles as maximum calibration values."""
-        for name in self.joint_names:
+        for name in self.motor_names:
             if name in current_angles:
                 self.max_values[name] = current_angles[name]
 
-    def remap_angle(self, joint_name: str, angle: float) -> float:
+    def get_motor_value(self, motor_name: str, angle: float) -> int:
         """
-        Remap angle from calibrated range to [0, π] range.
+        Map angle to motor value (0-255) based on calibrated range.
 
-        Formula: remapped = (angle - min) / (max - min) * π
+        Logic:
+        - Min Angle -> Motor 255 (Open/Extended)
+        - Max Angle -> Motor 0 (Closed/Flexed)
+        - Values are clamped to 0-255
         """
-        min_val = self.min_values.get(joint_name, 0.0)
-        max_val = self.max_values.get(joint_name, math.pi)
+        min_val = self.min_values.get(motor_name, 0.0)
+        max_val = self.max_values.get(motor_name, math.pi)
 
-        # Avoid division by zero
-        if abs(max_val - min_val) < 0.001:
-            return angle
+        if abs(max_val - min_val) < 0.0001:
+            # Avoid division by zero, return default open (255)
+            return 255
 
-        # Clamp and remap
-        clamped = max(min_val, min(max_val, angle))
-        normalized = (clamped - min_val) / (max_val - min_val)
+        # Normalize to 0.0 (at min) to 1.0 (at max)
+        normalized = (angle - min_val) / (max_val - min_val)
 
-        # Remap to target range
-        target_max = math.pi / 2 if 'cmc' in joint_name else math.pi
-        return normalized * target_max
+        # Clamp to 0.0 - 1.0
+        clamped = max(0.0, min(1.0, normalized))
 
-    def remap_all_angles(self, angles: Dict[str, float]) -> Dict[str, float]:
-        """Remap all joint angles using calibration data."""
-        remapped = {}
-        for name, angle in angles.items():
-            remapped[name] = self.remap_angle(name, angle)
-        return remapped
+        # Invert: 0.0 (Min Angle) -> 255, 1.0 (Max Angle) -> 0
+        return int((1.0 - clamped) * 255)
 
 
 class L20ControllerGUI:
@@ -110,12 +125,11 @@ class L20ControllerGUI:
 
         self.calibration = CalibrationData()
         self.current_angles: Dict[str, float] = {}
-        self.remapped_angles: Dict[str, float] = {}
         self.current_pose: List[int] = [255] * 20
 
-        # Track which joints are enabled for sending to robot
-        self.joint_enabled: Dict[str, bool] = {
-            name: True for name in self.calibration.joint_names
+        # Track which motors are enabled for sending to robot
+        self.motor_enabled: Dict[str, bool] = {
+            name: True for name in self.calibration.motor_names
         }
 
         # Track last sent pose to maintain positions of disabled joints
@@ -136,6 +150,47 @@ class L20ControllerGUI:
         self.control_thread: Optional[threading.Thread] = None
 
         self._setup_ui()
+
+    def _calculate_motor_angles(self, raw_angles: Dict[str, float]) -> Dict[str, float]:
+        """
+        Aggregate raw joint angles into motor-specific control angles.
+        """
+        motor_angles = {}
+
+        # Helper for getting raw angle with default 0
+        def get(name): return raw_angles.get(name, 0.0)
+
+        # Thumb
+        motor_angles['thumb_base'] = (get('thumb_mcp') + get('thumb_ip')) / 2.0
+        motor_angles['thumb_abduction'] = get('thumb_cmc_abd')
+        motor_angles['thumb_yaw'] = get('thumb_cmc_flex')
+        motor_angles['thumb_tip'] = get('thumb_ip')
+
+        # Index
+        motor_angles['index_base'] = (get('index_mcp') + get('index_pip') + get('index_dip')) / 3.0
+        motor_angles['index_tip'] = get('index_dip')
+        motor_angles['index_spread'] = 0.0  # Default
+
+        # Middle
+        motor_angles['middle_base'] = (get('middle_mcp') + get('middle_pip') + get('middle_dip')) / 3.0
+        motor_angles['middle_tip'] = get('middle_dip')
+        motor_angles['middle_spread'] = 0.0
+
+        # Ring
+        motor_angles['ring_base'] = (get('ring_mcp') + get('ring_pip') + get('ring_dip')) / 3.0
+        motor_angles['ring_tip'] = get('ring_dip')
+        motor_angles['ring_spread'] = 0.0
+
+        # Pinky
+        motor_angles['pinky_base'] = (get('pinky_mcp') + get('pinky_pip') + get('pinky_dip')) / 3.0
+        motor_angles['pinky_tip'] = get('pinky_dip')
+        motor_angles['pinky_spread'] = 0.0
+
+        # Reserved
+        for i in range(11, 15):
+            motor_angles[f'reserved_{i}'] = 0.0
+
+        return motor_angles
 
     def _setup_ui(self):
         """Create the user interface."""
@@ -213,28 +268,32 @@ class L20ControllerGUI:
         style.configure("Treeview.Heading", font=('Arial', 10, 'bold'))
 
         # Create Treeview
-        columns = ('enabled', 'raw_deg', 'raw_rad', 'cal_min', 'cal_max', 'remapped_deg', 'motor')
+        columns = ('enabled', 'recv_deg', 'raw_deg', 'cal_min', 'cal_max', 'remapped_deg', 'motor', 'goto_min', 'goto_max')
         self.tree = ttk.Treeview(display_frame, columns=columns, height=22)
 
         # Define headings
         self.tree.heading('#0', text='Joint')
         self.tree.heading('enabled', text='Enabled')
-        self.tree.heading('raw_deg', text='Raw (°)')
-        self.tree.heading('raw_rad', text='Raw (rad)')
+        self.tree.heading('recv_deg', text='Recv (°)')
+        self.tree.heading('raw_deg', text='Sent (°)')
         self.tree.heading('cal_min', text='Min (°)')
         self.tree.heading('cal_max', text='Max (°)')
-        self.tree.heading('remapped_deg', text='Remapped (°)')
-        self.tree.heading('motor', text='Motor (0-255)')
+        self.tree.heading('remapped_deg', text='Map (°)')
+        self.tree.heading('motor', text='Motor')
+        self.tree.heading('goto_min', text='Go Min')
+        self.tree.heading('goto_max', text='Go Max')
 
         # Define column widths - increased for better visibility
-        self.tree.column('#0', width=150, anchor=tk.W)
-        self.tree.column('enabled', width=80, anchor=tk.CENTER)
-        self.tree.column('raw_deg', width=100, anchor=tk.CENTER)
-        self.tree.column('raw_rad', width=100, anchor=tk.CENTER)
-        self.tree.column('cal_min', width=100, anchor=tk.CENTER)
-        self.tree.column('cal_max', width=100, anchor=tk.CENTER)
-        self.tree.column('remapped_deg', width=120, anchor=tk.CENTER)
-        self.tree.column('motor', width=130, anchor=tk.CENTER)
+        self.tree.column('#0', width=140, anchor=tk.W)
+        self.tree.column('enabled', width=60, anchor=tk.CENTER)
+        self.tree.column('recv_deg', width=80, anchor=tk.CENTER)
+        self.tree.column('raw_deg', width=80, anchor=tk.CENTER)
+        self.tree.column('cal_min', width=75, anchor=tk.CENTER)
+        self.tree.column('cal_max', width=75, anchor=tk.CENTER)
+        self.tree.column('remapped_deg', width=75, anchor=tk.CENTER)
+        self.tree.column('motor', width=75, anchor=tk.CENTER)
+        self.tree.column('goto_min', width=75, anchor=tk.CENTER)
+        self.tree.column('goto_max', width=75, anchor=tk.CENTER)
 
         # Scrollbar
         scrollbar = ttk.Scrollbar(display_frame, orient=tk.VERTICAL,
@@ -280,26 +339,34 @@ class L20ControllerGUI:
         self._populate_joint_tree()
 
     def _populate_joint_tree(self):
-        """Populate the tree with joint names grouped by finger."""
+        """Populate the tree with motor names grouped by finger."""
         finger_groups = [
-            ("Thumb", ['thumb_cmc_abd', 'thumb_cmc_flex', 'thumb_mcp', 'thumb_ip']),
-            ("Index", ['index_mcp', 'index_pip', 'index_dip']),
-            ("Middle", ['middle_mcp', 'middle_pip', 'middle_dip']),
-            ("Ring", ['ring_mcp', 'ring_pip', 'ring_dip']),
-            ("Pinky", ['pinky_mcp', 'pinky_pip', 'pinky_dip']),
+            "Thumb",
+            "Index",
+            "Middle",
+            "Ring",
+            "Pinky",
+            "Reserved",
         ]
 
-        for finger_name, joints in finger_groups:
+        for finger_name in finger_groups:
             # Insert parent (finger name)
             parent = self.tree.insert('', tk.END, text=finger_name,
-                                      values=('\u2713', '', '', '', '', '', ''),
+                                      values=('\u2713', '', '', '', '', '', '', '[MIN]', '[MAX]'),
                                       tags=('parent',))
 
-            # Insert children (joint names)
-            for joint in joints:
-                joint_display = joint.replace('_', ' ').upper()
-                self.tree.insert(parent, tk.END, iid=joint, text=f"  {joint_display}",
-                                values=('\u2713', '0.0', '0.00', '0.0', '180.0', '0.0', '255'))
+            # Get motors for this finger (spread on top)
+            motors = self._get_finger_motors(finger_name)
+
+            # Insert children (motor names with motor index)
+            for motor_name in motors:
+                motor_idx = self.calibration.motor_names.index(motor_name)
+                # Display as "Motor X: Description"
+                motor_desc = motor_name.replace('_', ' ').title()
+                display_name = f"  Motor {motor_idx}: {motor_desc}"
+
+                self.tree.insert(parent, tk.END, iid=motor_name, text=display_name,
+                                values=('\u2713', '0.0', '0.0', '0.0', '180.0', '0.0', '255', '[MIN]', '[MAX]'))
 
             # Expand all sections by default
             self.tree.item(parent, open=True)
@@ -310,89 +377,133 @@ class L20ControllerGUI:
         # Bind click event for toggling enabled state
         self.tree.bind('<Button-1>', self._on_tree_click)
 
-    def _get_finger_joints(self, finger_name: str) -> List[str]:
-        """Get list of joint names for a given finger."""
+    def _get_finger_motors(self, finger_name: str) -> List[str]:
+        """Get list of motor names for a given finger (spread on top)."""
         finger_map = {
-            "Thumb": ['thumb_cmc_abd', 'thumb_cmc_flex', 'thumb_mcp', 'thumb_ip'],
-            "Index": ['index_mcp', 'index_pip', 'index_dip'],
-            "Middle": ['middle_mcp', 'middle_pip', 'middle_dip'],
-            "Ring": ['ring_mcp', 'ring_pip', 'ring_dip'],
-            "Pinky": ['pinky_mcp', 'pinky_pip', 'pinky_dip'],
+            "Thumb": ['thumb_abduction', 'thumb_yaw', 'thumb_base', 'thumb_tip'],
+            "Index": ['index_spread', 'index_base', 'index_tip'],
+            "Middle": ['middle_spread', 'middle_base', 'middle_tip'],
+            "Ring": ['ring_spread', 'ring_base', 'ring_tip'],
+            "Pinky": ['pinky_spread', 'pinky_base', 'pinky_tip'],
+            "Reserved": ['reserved_11', 'reserved_12', 'reserved_13', 'reserved_14'],
         }
         return finger_map.get(finger_name, [])
 
-    def _get_pose_indices_for_joint(self, joint_name: str) -> List[int]:
-        """Get which pose indices are affected by this joint."""
-        # Based on the mapping in kinematics.py angles_to_l20_pose
-        mapping = {
-            'thumb_cmc_abd': [5],
-            'thumb_cmc_flex': [10],
-            'thumb_mcp': [0, 15],
-            'thumb_ip': [0, 15],
-            'index_mcp': [1, 16],
-            'index_pip': [1, 16],
-            'index_dip': [1, 16],
-            'middle_mcp': [2, 17],
-            'middle_pip': [2, 17],
-            'middle_dip': [2, 17],
-            'ring_mcp': [3, 18],
-            'ring_pip': [3, 18],
-            'ring_dip': [3, 18],
-            'pinky_mcp': [4, 19],
-            'pinky_pip': [4, 19],
-            'pinky_dip': [4, 19],
-        }
-        return mapping.get(joint_name, [])
+    def _go_to_motor_limit(self, motor_name: str, is_min: bool):
+        """
+        Move a specific motor to limit (0 or 255).
+
+        Args:
+            motor_name: Name of the motor to move
+            is_min: True to go to motor 0 (fully flexed), False to go to motor 255 (fully extended)
+        """
+        if not self.running or not self._hand_instance:
+            self.status_label.config(text="Status: Please start controller before moving motors")
+            return
+
+        # Set motor value to 0 (min/flexed) or 255 (max/extended)
+        motor_value = 0 if is_min else 255
+
+        # Get pose index for this motor (1:1 mapping)
+        motor_idx = self._get_pose_index_for_motor(motor_name)
+
+        # Update the motor position in last_sent_pose and current_pose
+        self.last_sent_pose[motor_idx] = motor_value
+        self.current_pose[motor_idx] = motor_value
+
+        # Send the updated pose
+        try:
+            self._hand_instance.finger_move(pose=self.last_sent_pose)
+            limit_type = "MIN (0)" if is_min else "MAX (255)"
+            self.status_label.config(
+                text=f"Status: Moved {motor_name} (motor {motor_idx}) to {limit_type}"
+            )
+            # Update display immediately
+            self.update_angles_display()
+        except Exception as e:  # noqa: BLE001
+            print(f"Error moving motor: {e}")
+            self.status_label.config(text=f"Status: Error moving motor - {e}")
+
+    def _get_pose_index_for_motor(self, motor_name: str) -> int:
+        """Get pose index for a motor (1:1 mapping)."""
+        # Direct 1:1 mapping - motor name index = pose index
+        return self.calibration.motor_names.index(motor_name)
 
     def _on_tree_click(self, event):
-        """Handle click events on the tree to toggle enabled state."""
+        """Handle click events on the tree to toggle enabled state or go to min/max."""
         # Identify which column was clicked
         column = self.tree.identify_column(event.x)
-        if column != '#1':  # #1 is the first data column (enabled)
-            return
 
         # Identify which row was clicked
         row_id = self.tree.identify_row(event.y)
         if not row_id:
             return
 
-        # Check if it's a parent (finger group) or child (individual joint)
-        if row_id in self.calibration.joint_names:
-            # Individual joint
-            self.joint_enabled[row_id] = not self.joint_enabled[row_id]
+        # Handle "Go to Min" column (#8)
+        if column == '#8':
+            if row_id in self.calibration.motor_names:
+                # Individual motor - go to min
+                self._go_to_motor_limit(row_id, is_min=True)
+            else:
+                # Parent row (finger group) - go to min for all motors
+                motors = self._get_finger_motors(self.tree.item(row_id)['text'])
+                for motor in motors:
+                    self._go_to_motor_limit(motor, is_min=True)
+            return
+
+        # Handle "Go to Max" column (#9)
+        if column == '#9':
+            if row_id in self.calibration.motor_names:
+                # Individual motor - go to max
+                self._go_to_motor_limit(row_id, is_min=False)
+            else:
+                # Parent row (finger group) - go to max for all motors
+                motors = self._get_finger_motors(self.tree.item(row_id)['text'])
+                for motor in motors:
+                    self._go_to_motor_limit(motor, is_min=False)
+            return
+
+        # Handle enabled/disabled toggle (#1)
+        if column != '#1':
+            return
+
+        # Check if it's a parent (finger group) or child (individual motor)
+        if row_id in self.calibration.motor_names:
+            # Individual motor
+            self.motor_enabled[row_id] = not self.motor_enabled[row_id]
         else:
             # Parent row (finger group)
-            joints = self._get_finger_joints(self.tree.item(row_id)['text'])
+            motors = self._get_finger_motors(self.tree.item(row_id)['text'])
             # Toggle all children - if any are disabled, enable all; otherwise disable all
-            any_disabled = any(not self.joint_enabled.get(j, True) for j in joints)
+            any_disabled = any(not self.motor_enabled.get(m, True) for m in motors)
             new_state = True if any_disabled else False
-            for joint in joints:
-                self.joint_enabled[joint] = new_state
+            for motor in motors:
+                self.motor_enabled[motor] = new_state
 
         # Update the display
         self._update_tree_enabled_display()
 
     def _update_tree_enabled_display(self):
         """Refresh the enabled column display for all items."""
-        # Update individual joints
-        for joint_name in self.calibration.joint_names:
-            enabled = self.joint_enabled.get(joint_name, True)
+        # Update individual motors
+        for motor_name in self.calibration.motor_names:
+            enabled = self.motor_enabled.get(motor_name, True)
             symbol = '\u2713' if enabled else '\u2717'  # ✓ or ✗
-            current_values = list(self.tree.item(joint_name)['values'])
+            current_values = list(self.tree.item(motor_name)['values'])
             current_values[0] = symbol
             try:
-                self.tree.item(joint_name, values=current_values)
+                self.tree.item(motor_name, values=current_values)
             except tk.TclError:
                 pass
 
         # Update parent rows
-        finger_groups = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+        finger_groups = ["Thumb", "Index", "Middle", "Ring", "Pinky", "Reserved"]
         for item in self.tree.get_children():
             finger_name = self.tree.item(item)['text']
             if finger_name in finger_groups:
-                joints = self._get_finger_joints(finger_name)
-                enabled_count = sum(1 for j in joints if self.joint_enabled.get(j, True))
-                if enabled_count == len(joints):
+                motors = self._get_finger_motors(finger_name)
+                enabled_count = sum(1 for m in motors if self.motor_enabled.get(m, True))
+                if enabled_count == len(motors):
                     symbol = '\u2713'  # All enabled
                 elif enabled_count == 0:
                     symbol = '\u2717'  # All disabled
@@ -407,9 +518,9 @@ class L20ControllerGUI:
                     pass
 
     def activate_all_joints(self):
-        """Enable all joints."""
-        for joint_name in self.calibration.joint_names:
-            self.joint_enabled[joint_name] = True
+        """Enable all motors."""
+        for motor_name in self.calibration.motor_names:
+            self.motor_enabled[motor_name] = True
         self._update_tree_enabled_display()
 
         # Update status to indicate tracking resumed
@@ -417,9 +528,9 @@ class L20ControllerGUI:
             self.status_label.config(text="Status: Running - MediaPipe tracking resumed")
 
     def deactivate_all_joints(self):
-        """Disable all joints."""
-        for joint_name in self.calibration.joint_names:
-            self.joint_enabled[joint_name] = False
+        """Disable all motors."""
+        for motor_name in self.calibration.motor_names:
+            self.motor_enabled[motor_name] = False
         self._update_tree_enabled_display()
 
     def apply_preset(self, gesture_name: str):
@@ -440,56 +551,74 @@ class L20ControllerGUI:
             self.status_label.config(text="Status: Please start controller before applying presets")
             return
 
-        # Update last sent pose
+        # Update last sent pose and current pose
         self.last_sent_pose = preset_pose.copy()
+        self.current_pose = preset_pose.copy()
 
         # Deactivate all joints to pause MediaPipe tracking
         self.deactivate_all_joints()
+
+        # Update display immediately
+        self.update_angles_display()
 
         # Update status
         self.status_label.config(text=f"Status: Preset '{gesture_name}' applied - Click 'Activate All' to resume tracking")
 
     def update_angles_display(self):
-        """Update the angles display with current values."""
-        for joint_name in self.calibration.joint_names:
-            raw_angle = self.current_angles.get(joint_name, 0.0)
-            remapped_angle = self.remapped_angles.get(joint_name, 0.0)
+        """Update the angles display with current motor values."""
+        # Display motor values directly from current_pose (20 motors)
+        for motor_name in self.calibration.motor_names:
+            motor_idx = self._get_pose_index_for_motor(motor_name)
+            motor_value = self.current_pose[motor_idx]
 
-            cal_min = self.calibration.min_values[joint_name]
-            cal_max = self.calibration.max_values[joint_name]
+            cal_min = self.calibration.min_values[motor_name]
+            cal_max = self.calibration.max_values[motor_name]
 
-            # Calculate motor value
-            max_angle = math.pi / 2 if 'cmc' in joint_name else math.pi
-            motor_value = int((1.0 - remapped_angle / max_angle) * 255)
-            motor_value = max(0, min(255, motor_value))
+            # Received aggregated angle for this motor
+            recv_angle = self.current_angles.get(motor_name, 0.0)
+            recv_deg = math.degrees(recv_angle)
+
+            # Motor to angle: 255 -> 0, 0 -> PI
+            sent_angle_rad = (1.0 - motor_value / 255.0) * math.pi
+            sent_deg = math.degrees(sent_angle_rad)
+
+            # Mapped angle (normalized recv_angle between cal_min/cal_max mapped to 0-180)
+            range_val = cal_max - cal_min
+            if abs(range_val) > 0.0001:
+                norm = max(0.0, min(1.0, (recv_angle - cal_min) / range_val))
+                map_deg = norm * 180.0
+            else:
+                map_deg = 0.0
 
             # Get enabled status
-            enabled = self.joint_enabled.get(joint_name, True)
+            enabled = self.motor_enabled.get(motor_name, True)
             enabled_symbol = '\u2713' if enabled else '\u2717'  # ✓ or ✗
 
             values = (
                 enabled_symbol,
-                f"{math.degrees(raw_angle):.1f}",
-                f"{raw_angle:.2f}",
+                f"{recv_deg:.1f}",
+                f"{sent_deg:.1f}",
                 f"{math.degrees(cal_min):.1f}",
                 f"{math.degrees(cal_max):.1f}",
-                f"{math.degrees(remapped_angle):.1f}",
-                f"{motor_value}"
+                f"{map_deg:.1f}",
+                f"{motor_value}",
+                "[MIN]",
+                "[MAX]"
             )
 
             try:
-                self.tree.item(joint_name, values=values)
+                self.tree.item(motor_name, values=values)
             except tk.TclError:
-                pass  # Joint not in tree yet
+                pass  # Motor not in tree yet
 
         # Update parent rows to show aggregated enabled status
-        finger_groups = ["Thumb", "Index", "Middle", "Ring", "Pinky"]
+        finger_groups = ["Thumb", "Index", "Middle", "Ring", "Pinky", "Reserved"]
         for item in self.tree.get_children():
             finger_name = self.tree.item(item)['text']
             if finger_name in finger_groups:
-                joints = self._get_finger_joints(finger_name)
-                enabled_count = sum(1 for j in joints if self.joint_enabled.get(j, True))
-                if enabled_count == len(joints):
+                motors = self._get_finger_motors(finger_name)
+                enabled_count = sum(1 for m in motors if self.motor_enabled.get(m, True))
+                if enabled_count == len(motors):
                     symbol = '\u2713'  # All enabled
                 elif enabled_count == 0:
                     symbol = '\u2717'  # All disabled
@@ -541,6 +670,7 @@ class L20ControllerGUI:
         if self.current_angles:
             self.calibration.calibrate_min(self.current_angles)
             self.status_label.config(text="Status: MIN calibration captured!")
+            self.update_angles_display()
             self.root.after(2000, lambda: self.status_label.config(
                 text="Status: Running - Listening on tcp://localhost:5557"
             ))
@@ -550,6 +680,7 @@ class L20ControllerGUI:
         if self.current_angles:
             self.calibration.calibrate_max(self.current_angles)
             self.status_label.config(text="Status: MAX calibration captured!")
+            self.update_angles_display()
             self.root.after(2000, lambda: self.status_label.config(
                 text="Status: Running - Listening on tcp://localhost:5557"
             ))
@@ -558,39 +689,34 @@ class L20ControllerGUI:
         """Reset calibration to defaults."""
         self.calibration = CalibrationData()
         self.status_label.config(text="Status: Calibration reset to defaults")
+        self.update_angles_display()
         self.root.after(2000, lambda: self.status_label.config(
             text="Status: Ready" if not self.running else
                  "Status: Running - Listening on tcp://localhost:5557"
         ))
 
-    def _merge_poses(self, new_pose: List[int], remapped_angles: Dict[str, float]) -> List[int]:
+    def _merge_poses(self, new_pose: List[int]) -> List[int]:
         """
-        Merge new pose with last sent pose based on enabled joints.
+        Merge new pose with last sent pose based on enabled motors.
 
-        For enabled joints, use values from new_pose.
-        For disabled joints, keep values from last_sent_pose.
+        For enabled motors, use values from new_pose.
+        For disabled motors, keep values from last_sent_pose.
 
         Args:
             new_pose: The newly calculated pose (20 motor values)
-            remapped_angles: The remapped joint angles used to calculate new_pose
 
         Returns:
-            Merged pose with enabled joints updated, disabled joints preserved
+            Merged pose with enabled motors updated, disabled motors preserved
         """
         # Start with a copy of the last sent pose
         merged_pose = self.last_sent_pose.copy()
 
-        # Track which pose indices have been updated by enabled joints
-        updated_indices = set()
-
-        # Update pose indices for each enabled joint
-        for joint_name in self.calibration.joint_names:
-            if self.joint_enabled.get(joint_name, True):
-                # This joint is enabled, update its corresponding pose indices
-                indices = self._get_pose_indices_for_joint(joint_name)
-                for idx in indices:
-                    merged_pose[idx] = new_pose[idx]
-                    updated_indices.add(idx)
+        # Update pose index for each enabled motor (1:1 mapping)
+        for motor_name in self.calibration.motor_names:
+            if self.motor_enabled.get(motor_name, True):
+                # This motor is enabled, update its pose value
+                motor_idx = self._get_pose_index_for_motor(motor_name)
+                merged_pose[motor_idx] = new_pose[motor_idx]
 
         return merged_pose
 
@@ -633,17 +759,22 @@ class L20ControllerGUI:
                     landmarks = parse_landmarks(message)
                     raw_angles = calculate_all_joint_angles(landmarks)
 
-                    # Store raw angles
-                    self.current_angles = raw_angles
+                    # Convert to motor angles
+                    motor_angles = self._calculate_motor_angles(raw_angles)
 
-                    # Apply calibration remapping
-                    self.remapped_angles = self.calibration.remap_all_angles(raw_angles)
+                    # Store for display and calibration
+                    self.current_angles = motor_angles
 
-                    # Convert to pose
-                    new_pose = angles_to_l20_pose(self.remapped_angles)
+                    # Calculate new pose using calibrated values
+                    new_pose = [0] * 20
+                    for motor_name in self.calibration.motor_names:
+                        angle = motor_angles.get(motor_name, 0.0)
+                        motor_val = self.calibration.get_motor_value(motor_name, angle)
+                        motor_idx = self._get_pose_index_for_motor(motor_name)
+                        new_pose[motor_idx] = motor_val
 
                     # Merge with last sent pose based on enabled joints
-                    self.current_pose = self._merge_poses(new_pose, self.remapped_angles)
+                    self.current_pose = self._merge_poses(new_pose)
 
                     # Update last sent pose
                     self.last_sent_pose = self.current_pose.copy()
