@@ -37,6 +37,8 @@ except ImportError:
     print("Make sure l20_controller.py is in the same directory.")
     sys.exit(1)
 
+from debug import calculate_middle_mcp_flexion_debug
+
 
 class CalibrationData:
     """Stores min/max calibration values for each motor."""
@@ -143,6 +145,37 @@ class L20ControllerGUI:
             "点赞": [255, 0, 0, 0, 0, 127, 10, 100, 180, 240, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0],
         }
 
+        self.debug_data = {
+            "wrist": (0.0, 0.0, 0.0),
+            "index_mcp": (0.0, 0.0, 0.0),
+            "pinky_mcp": (0.0, 0.0, 0.0),
+            "middle_mcp": (0.0, 0.0, 0.0),
+            "middle_pip": (0.0, 0.0, 0.0),
+            "plane_normal": (0.0, 0.0, 0.0),
+            "vec1": (0.0, 0.0, 0.0),
+            "vec2": (0.0, 0.0, 0.0),
+            "vec1_proj": (0.0, 0.0, 0.0),
+            "vec2_proj": (0.0, 0.0, 0.0),
+            "vec1_norm": (0.0, 0.0, 0.0),
+            "vec2_norm": (0.0, 0.0, 0.0),
+            "angle_rad": 0.0,
+        }
+        self.debug_vars = {
+            "wrist": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "index_mcp": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "pinky_mcp": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "middle_mcp": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "middle_pip": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "plane_normal": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "vec1": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "vec2": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "vec1_proj": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "vec2_proj": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "vec1_norm": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "vec2_norm": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
+            "angle_rad": tk.StringVar(value="0.0000 rad (0.00°)"),
+        }
+
         # Hand instance reference for preset commands
         self._hand_instance = None
 
@@ -212,8 +245,24 @@ class L20ControllerGUI:
         # Control buttons
         self._create_control_panel(main_frame)
 
+        # Tabs
+        self.notebook = ttk.Notebook(main_frame)
+        self.notebook.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+
+        angles_tab = ttk.Frame(self.notebook)
+        debug_tab = ttk.Frame(self.notebook)
+
+        self.notebook.add(angles_tab, text="Joint Angles")
+        self.notebook.add(debug_tab, text="Debug")
+
+        angles_tab.columnconfigure(0, weight=1)
+        angles_tab.rowconfigure(0, weight=1)
+        debug_tab.columnconfigure(0, weight=1)
+        debug_tab.rowconfigure(0, weight=1)
+
         # Joint angles display
-        self._create_angles_display(main_frame)
+        self._create_angles_display(angles_tab)
+        self._create_debug_display(debug_tab)
 
         # Status bar
         self.status_label = ttk.Label(main_frame, text="Status: Ready",
@@ -258,7 +307,7 @@ class L20ControllerGUI:
     def _create_angles_display(self, parent: ttk.Frame):
         """Create joint angles display table."""
         display_frame = ttk.LabelFrame(parent, text="Joint Angles", padding="10")
-        display_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        display_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         display_frame.columnconfigure(0, weight=1)
         display_frame.rowconfigure(0, weight=1)
 
@@ -337,6 +386,68 @@ class L20ControllerGUI:
 
         # Populate joint names
         self._populate_joint_tree()
+
+    def _create_debug_display(self, parent: ttk.Frame):
+        """Create debug display tab."""
+        debug_frame = ttk.LabelFrame(parent, text="Calculation Debug", padding="10")
+        debug_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        debug_frame.columnconfigure(1, weight=1)
+
+        labels = [
+            ("Wrist:", "wrist"),
+            ("Index MCP:", "index_mcp"),
+            ("Pinky MCP:", "pinky_mcp"),
+            ("Middle MCP:", "middle_mcp"),
+            ("Middle PIP:", "middle_pip"),
+            ("Plane Normal (index_mcp - pinky_mcp):", "plane_normal"),
+            ("Vec1 (middle_mcp - wrist):", "vec1"),
+            ("Vec2 (middle_pip - middle_mcp):", "vec2"),
+            ("Vec1 Projected:", "vec1_proj"),
+            ("Vec2 Projected:", "vec2_proj"),
+            ("Vec1 Normalized:", "vec1_norm"),
+            ("Vec2 Normalized:", "vec2_norm"),
+            ("Angle (vec1_norm vs vec2_norm):", "angle_rad"),
+        ]
+
+        for row, (label, key) in enumerate(labels):
+            ttk.Label(debug_frame, text=label).grid(
+                row=row, column=0, sticky=tk.W, padx=(0, 10), pady=(0, 6)
+            )
+            ttk.Label(debug_frame, textvariable=self.debug_vars[key], font=('Arial', 10, 'bold')).grid(
+                row=row, column=1, sticky=tk.W, pady=(0, 6)
+            )
+
+    def _format_vector(self, v: Tuple[float, float, float]) -> str:
+        return f"({v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f})"
+
+    def update_debug_display(self):
+        """Update debug tab values."""
+        if not self.debug_data:
+            return
+
+        vector_keys = [
+            "wrist",
+            "index_mcp",
+            "pinky_mcp",
+            "middle_mcp",
+            "middle_pip",
+            "plane_normal",
+            "vec1",
+            "vec2",
+            "vec1_proj",
+            "vec2_proj",
+            "vec1_norm",
+            "vec2_norm",
+        ]
+        for key in vector_keys:
+            self.debug_vars[key].set(
+                self._format_vector(self.debug_data.get(key, (0.0, 0.0, 0.0)))
+            )
+
+        angle_rad = float(self.debug_data.get("angle_rad", 0.0))
+        self.debug_vars["angle_rad"].set(
+            f"{angle_rad:.4f} rad ({math.degrees(angle_rad):.2f}°)"
+        )
 
     def _populate_joint_tree(self):
         """Populate the tree with motor names grouped by finger."""
@@ -758,6 +869,12 @@ class L20ControllerGUI:
                 try:
                     landmarks = parse_landmarks(message)
                     raw_angles = calculate_all_joint_angles(landmarks)
+
+                    try:
+                        self.debug_data = calculate_middle_mcp_flexion_debug(landmarks)
+                        self.root.after(0, self.update_debug_display)
+                    except Exception:
+                        pass
 
                     # Convert to motor angles
                     motor_angles = self._calculate_motor_angles(raw_angles)
