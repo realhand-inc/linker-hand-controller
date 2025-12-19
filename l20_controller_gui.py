@@ -19,6 +19,7 @@ from tkinter import ttk
 from typing import Dict, List, Optional, Tuple
 
 import zmq
+import yaml
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if REPO_ROOT not in sys.path:
@@ -127,11 +128,12 @@ class L20ControllerGUI:
 
         self.calibration = CalibrationData()
         self.current_angles: Dict[str, float] = {}
+        self.current_raw_angles: Dict[str, float] = {}
         self.current_pose: List[int] = [255] * 20
 
         # Track which motors are enabled for sending to robot
         self.motor_enabled: Dict[str, bool] = {
-            name: True for name in self.calibration.motor_names
+            name: False for name in self.calibration.motor_names
         }
 
         # Track last sent pose to maintain positions of disabled joints
@@ -144,6 +146,8 @@ class L20ControllerGUI:
             "OK": [191, 95, 255, 255, 255, 136, 107, 100, 180, 240, 72, 255, 255, 255, 255, 116, 99, 255, 255, 255],
             "点赞": [255, 0, 0, 0, 0, 127, 10, 100, 180, 240, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0],
         }
+
+        self.motor_angle_map = self._load_motor_angle_map()
 
         self.debug_data = {
             "wrist": (0.0, 0.0, 0.0),
@@ -183,47 +187,6 @@ class L20ControllerGUI:
         self.control_thread: Optional[threading.Thread] = None
 
         self._setup_ui()
-
-    def _calculate_motor_angles(self, raw_angles: Dict[str, float]) -> Dict[str, float]:
-        """
-        Aggregate raw joint angles into motor-specific control angles.
-        """
-        motor_angles = {}
-
-        # Helper for getting raw angle with default 0
-        def get(name): return raw_angles.get(name, 0.0)
-
-        # Thumb
-        motor_angles['thumb_base'] = (get('thumb_mcp') + get('thumb_ip')) / 2.0
-        motor_angles['thumb_abduction'] = get('thumb_cmc_abd')
-        motor_angles['thumb_yaw'] = get('thumb_cmc_flex')
-        motor_angles['thumb_tip'] = get('thumb_ip')
-
-        # Index
-        motor_angles['index_base'] = (get('index_mcp') + get('index_pip') + get('index_dip')) / 3.0
-        motor_angles['index_tip'] = get('index_dip')
-        motor_angles['index_spread'] = 0.0  # Default
-
-        # Middle
-        motor_angles['middle_base'] = (get('middle_mcp') + get('middle_pip') + get('middle_dip')) / 3.0
-        motor_angles['middle_tip'] = get('middle_dip')
-        motor_angles['middle_spread'] = 0.0
-
-        # Ring
-        motor_angles['ring_base'] = (get('ring_mcp') + get('ring_pip') + get('ring_dip')) / 3.0
-        motor_angles['ring_tip'] = get('ring_dip')
-        motor_angles['ring_spread'] = 0.0
-
-        # Pinky
-        motor_angles['pinky_base'] = (get('pinky_mcp') + get('pinky_pip') + get('pinky_dip')) / 3.0
-        motor_angles['pinky_tip'] = get('pinky_dip')
-        motor_angles['pinky_spread'] = 0.0
-
-        # Reserved
-        for i in range(11, 15):
-            motor_angles[f'reserved_{i}'] = 0.0
-
-        return motor_angles
 
     def _setup_ui(self):
         """Create the user interface."""
@@ -419,6 +382,40 @@ class L20ControllerGUI:
 
     def _format_vector(self, v: Tuple[float, float, float]) -> str:
         return f"({v[0]:.4f}, {v[1]:.4f}, {v[2]:.4f})"
+
+    def _load_motor_angle_map(self) -> Dict[str, str]:
+        """Load motor-to-raw-joint mapping from YAML config."""
+        default_map = {
+            "thumb_base": "thumb_mcp",
+            "thumb_abduction": "thumb_cmc_abd",
+            "thumb_yaw": "thumb_cmc_flex",
+            "thumb_tip": "thumb_ip",
+            "index_base": "index_mcp",
+            "index_tip": "index_dip",
+            "middle_base": "middle_mcp",
+            "middle_tip": "middle_dip",
+            "ring_base": "ring_mcp",
+            "ring_tip": "ring_dip",
+            "pinky_base": "pinky_mcp",
+            "pinky_tip": "pinky_dip",
+        }
+
+        map_path = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)),
+            "LinkerHand",
+            "config",
+            "motor_angle_map.yaml",
+        )
+        try:
+            with open(map_path, "r", encoding="utf-8") as file:
+                data = yaml.safe_load(file) or {}
+            loaded_map = data.get("motor_angle_map", {})
+            if isinstance(loaded_map, dict) and loaded_map:
+                return loaded_map
+        except Exception as exc:  # noqa: BLE001
+            print(f"Warning: Failed to load motor angle map: {exc}")
+
+        return default_map
 
     def update_debug_display(self):
         """Update debug tab values."""
@@ -685,8 +682,8 @@ class L20ControllerGUI:
             cal_min = self.calibration.min_values[motor_name]
             cal_max = self.calibration.max_values[motor_name]
 
-            # Received aggregated angle for this motor
-            recv_angle = self.current_angles.get(motor_name, 0.0)
+            # Received raw joint angle mapped to this motor
+            recv_angle = self._get_raw_angle_for_motor(motor_name)
             recv_deg = math.degrees(recv_angle)
 
             # Motor to angle: 255 -> 0, 0 -> PI
@@ -744,10 +741,20 @@ class L20ControllerGUI:
                     except tk.TclError:
                         pass
 
+    def _get_raw_angle_for_motor(self, motor_name: str) -> float:
+        """Map motor name to a raw joint angle from calculate_all_joint_angles()."""
+        raw_key = self.motor_angle_map.get(motor_name)
+        if not raw_key:
+            return 0.0
+        return self.current_raw_angles.get(raw_key, 0.0)
+
     def start_controller(self):
         """Start the hand controller."""
         if self.running:
             return
+
+        # Ensure joints are deactivated on start
+        self.deactivate_all_joints()
 
         # Start control thread
         self.running = True
@@ -869,6 +876,7 @@ class L20ControllerGUI:
                 try:
                     landmarks = parse_landmarks(message)
                     raw_angles = calculate_all_joint_angles(landmarks)
+                    self.current_raw_angles = raw_angles
 
                     try:
                         self.debug_data = calculate_middle_mcp_flexion_debug(landmarks)
@@ -876,8 +884,10 @@ class L20ControllerGUI:
                     except Exception:
                         pass
 
-                    # Convert to motor angles
-                    motor_angles = self._calculate_motor_angles(raw_angles)
+                    # Map raw joint angles directly to motor angles
+                    motor_angles = {}
+                    for motor_name in self.calibration.motor_names:
+                        motor_angles[motor_name] = self._get_raw_angle_for_motor(motor_name)
 
                     # Store for display and calibration
                     self.current_angles = motor_angles

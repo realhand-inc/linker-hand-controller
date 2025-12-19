@@ -79,6 +79,30 @@ Edit LinkerHand/config/setting.yaml to match your setup.
    - Use **Calibrate MIN** (open hand) and **Calibrate MAX** (closed hand) for better accuracy
    - The display shows real-time joint angles and motor values
 
+## Data Flow Pipeline
+
+```text
+ZMQ SUB (tcp://localhost:5557)
+            |
+            v
+     parse_landmarks()
+            |
+            v
+calculate_all_joint_angles()
+            |
+            v
+_get_raw_angle_for_motor()
+            |
+            v
+CalibrationData.get_motor_value()
+            |
+            v
+      _merge_poses()
+            |
+            v
+LinkerHandApi.finger_move()
+```
+
 ## Closing a Stuck GUI Window
 
 If you terminate the app but the window stays open, find the process and kill it:

@@ -4,7 +4,9 @@ from .math_utils import (
     vector_subtract,
     vector_cross,
     vector_normalize,
-    signed_angle_in_plane
+    signed_angle_in_plane,
+    project_vector_onto_plane,
+    vector_dot
 )
 
 # MediaPipe hand landmark indices
@@ -201,10 +203,19 @@ def calculate_finger_mcp_flexion(
     # Finger segment (MCP to PIP)
     finger_vector = vector_subtract(pip, mcp)
 
-    # Calculate angle in plane perpendicular to knuckle line
-    angle = signed_angle_in_plane(ref_vector, finger_vector, rotation_axis)
+    # Project into plane perpendicular to knuckle line
+    ref_proj = project_vector_onto_plane(ref_vector, rotation_axis)
+    finger_proj = project_vector_onto_plane(finger_vector, rotation_axis)
 
-    return max(0.0, angle)
+    # Normalize projected vectors
+    ref_norm = vector_normalize(ref_proj)
+    finger_norm = vector_normalize(finger_proj)
+
+    # Unsigned angle between vectors
+    dot = max(-1.0, min(1.0, vector_dot(ref_norm, finger_norm)))
+    angle = math.acos(dot)
+
+    return angle
 
 
 def calculate_finger_pip_flexion(
