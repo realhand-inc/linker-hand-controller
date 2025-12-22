@@ -51,6 +51,21 @@ def project_vector_onto_plane(vector: Sequence[float], plane_normal: Sequence[fl
     return vector_subtract(vector, projection_on_normal)
 
 
+def palm_plane_normal(
+    middle_mcp: Sequence[float],
+    wrist: Sequence[float],
+    index_mcp: Sequence[float],
+    pinky_mcp: Sequence[float],
+) -> Tuple[float, float, float]:
+    """
+    Calculate a normalized palm plane normal using:
+    cross(middle_mcp - wrist, index_mcp - pinky_mcp).
+    """
+    middle_minus_wrist = vector_subtract(middle_mcp, wrist)
+    index_minus_pinky = vector_subtract(index_mcp, pinky_mcp)
+    return vector_normalize(vector_cross(middle_minus_wrist, index_minus_pinky))
+
+
 def signed_angle_in_plane(v1: Sequence[float], v2: Sequence[float], plane_normal: Sequence[float]) -> float:
     """
     Calculate signed angle between two vectors projected onto a plane.

@@ -1,65 +1,73 @@
-import math
 from typing import Sequence, Tuple, Dict
 
 from l20_controller.kinematics import LandmarkIndex
 from l20_controller.math_utils import (
     vector_subtract,
-    vector_normalize,
-    project_vector_onto_plane,
     vector_dot,
+    palm_plane_normal,
 )
 
 
-def calculate_middle_mcp_flexion_debug(
+def calculate_thumb_yaw_debug(
     landmarks: Sequence[Tuple[float, float, float]]
 ) -> Dict[str, object]:
     """
-    Return vectors and angle used for middle MCP flexion calculation.
+    Return distance of thumb IP to palm plane for thumb yaw debug.
 
     Outputs:
-        wrist, index_mcp, pinky_mcp, middle_mcp, middle_pip: landmark positions
-        plane_normal: index_mcp - pinky_mcp (normalized)
-        vec1: middle_mcp - wrist
-        vec2: middle_pip - middle_mcp
-        vec1_proj: vec1 projected onto plane perpendicular to plane_normal
-        vec2_proj: vec2 projected onto plane perpendicular to plane_normal
-        vec1_norm: normalized vec1_proj
-        vec2_norm: normalized vec2_proj
-        angle_rad: angle between vec1_norm and vec2_norm
+        thumb_ip, middle_mcp, wrist, index_mcp, pinky_mcp: landmark positions
+        plane_normal: cross(middle_mcp - wrist, index_mcp - pinky_mcp)
+        distance: absolute distance from thumb_ip to plane (unit: same as landmarks)
     """
+    thumb_ip = landmarks[LandmarkIndex.THUMB_IP]
+    middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
     wrist = landmarks[LandmarkIndex.WRIST]
     index_mcp = landmarks[LandmarkIndex.INDEX_MCP]
     pinky_mcp = landmarks[LandmarkIndex.PINKY_MCP]
-    middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
-    middle_pip = landmarks[LandmarkIndex.MIDDLE_PIP]
 
-    plane_normal_raw = vector_subtract(index_mcp, pinky_mcp)
-    plane_normal = vector_normalize(plane_normal_raw)
-
-    vec1 = vector_subtract(middle_mcp, wrist)
-    vec2 = vector_subtract(middle_pip, middle_mcp)
-
-    vec1_proj = project_vector_onto_plane(vec1, plane_normal)
-    vec2_proj = project_vector_onto_plane(vec2, plane_normal)
-
-    vec1_norm = vector_normalize(vec1_proj)
-    vec2_norm = vector_normalize(vec2_proj)
-
-    dot = max(-1.0, min(1.0, vector_dot(vec1_norm, vec2_norm)))
-    angle_rad = math.acos(dot)
+    plane_normal_norm = palm_plane_normal(middle_mcp, wrist, index_mcp, pinky_mcp)
+    thumb_vec = vector_subtract(thumb_ip, wrist)
+    distance = abs(vector_dot(thumb_vec, plane_normal_norm))
 
     return {
+        "thumb_ip": thumb_ip,
+        "middle_mcp": middle_mcp,
         "wrist": wrist,
         "index_mcp": index_mcp,
         "pinky_mcp": pinky_mcp,
+        "plane_normal": plane_normal_norm,
+        "distance": distance,
+    }
+
+
+def calculate_middle_tip_debug(
+    landmarks: Sequence[Tuple[float, float, float]]
+) -> Dict[str, object]:
+    """
+    Return reference vectors and landmark positions for middle finger tip angle debug.
+
+    Outputs:
+        middle_mcp, middle_dip, middle_tip: landmark positions
+        index_mcp, pinky_mcp: landmark positions for reference
+        vec1: DIP → TIP vector
+        vec2: MCP → DIP vector
+    """
+    middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
+    middle_dip = landmarks[LandmarkIndex.MIDDLE_DIP]
+    middle_tip = landmarks[LandmarkIndex.MIDDLE_TIP]
+    index_mcp = landmarks[LandmarkIndex.INDEX_MCP]
+    pinky_mcp = landmarks[LandmarkIndex.PINKY_MCP]
+
+    # Reference vectors for tip angle calculation
+    vec1 = vector_subtract(middle_tip, middle_dip)  # DIP → TIP
+    vec2 = vector_subtract(middle_dip, middle_mcp)  # MCP → DIP
+
+    return {
         "middle_mcp": middle_mcp,
-        "middle_pip": middle_pip,
-        "plane_normal": plane_normal_raw,
+        "middle_dip": middle_dip,
+        "middle_tip": middle_tip,
+        "index_mcp": index_mcp,
+        "pinky_mcp": pinky_mcp,
         "vec1": vec1,
         "vec2": vec2,
-        "vec1_proj": vec1_proj,
-        "vec2_proj": vec2_proj,
-        "vec1_norm": vec1_norm,
-        "vec2_norm": vec2_norm,
-        "angle_rad": angle_rad,
     }

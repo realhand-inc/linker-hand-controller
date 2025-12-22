@@ -1,13 +1,17 @@
 motor_angle_map:
   thumb_base: thumb_mcp
   thumb_abduction: thumb_cmc_abd
-  thumb_yaw: thumb_cmc_flex
+  thumb_yaw: thumb_yaw
   thumb_tip: thumb_ip
   index_base: index_mcp
+  index_spread: index_spread
   index_tip: index_dip
   middle_base: middle_mcp
+  middle_spread: middle_spread
   middle_tip: middle_dip
   ring_base: ring_mcp
+  ring_spread: ring_spread
   ring_tip: ring_dip
   pinky_base: pinky_mcp
+  pinky_spread: pinky_spread
   pinky_tip: pinky_dip

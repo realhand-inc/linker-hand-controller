@@ -6,7 +6,8 @@ from .math_utils import (
     vector_normalize,
     signed_angle_in_plane,
     project_vector_onto_plane,
-    vector_dot
+    vector_dot,
+    palm_plane_normal
 )
 
 # MediaPipe hand landmark indices
@@ -43,30 +44,35 @@ def calculate_thumb_cmc_abduction(landmarks: Sequence[Tuple[float, float, float]
     Calculate thumb CMC (carpometacarpal) abduction/adduction angle.
 
     Projects onto the plane perpendicular to the palm (frontal plane).
-    Measures angle between wrist→index_mcp and wrist→thumb_cmc.
+    Measures angle between projected thumb direction and palm width (pinky to index).
 
     Returns: angle in radians [0, π/2], where 0 = adducted, π/2 = abducted
     """
     wrist = landmarks[LandmarkIndex.WRIST]
     thumb_cmc = landmarks[LandmarkIndex.THUMB_CMC]
+    thumb_tip = landmarks[LandmarkIndex.THUMB_TIP]
     index_mcp = landmarks[LandmarkIndex.INDEX_MCP]
     middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
+    pinky_mcp = landmarks[LandmarkIndex.PINKY_MCP]
 
-    # Define palm plane using wrist and two finger bases
-    v_index = vector_subtract(index_mcp, wrist)
-    v_middle = vector_subtract(middle_mcp, wrist)
-    palm_normal = vector_normalize(vector_cross(v_index, v_middle))
+    palm_normal = palm_plane_normal(middle_mcp, wrist, index_mcp, pinky_mcp)
 
-    # Reference vector: wrist to index base
-    ref_vector = vector_subtract(index_mcp, wrist)
+    # Reference vector: pinky MCP to index MCP (palm width direction)
+    ref_vector = vector_subtract(index_mcp, pinky_mcp)
+    # Thumb direction: thumb CMC to thumb tip
+    thumb_vector = vector_subtract(thumb_tip, thumb_cmc)
 
-    # Vector to measure: wrist to thumb CMC
-    thumb_vector = vector_subtract(thumb_cmc, wrist)
+    # Project both vectors onto palm plane
+    ref_proj = project_vector_onto_plane(ref_vector, palm_normal)
+    thumb_proj = project_vector_onto_plane(thumb_vector, palm_normal)
 
-    # Calculate angle in the frontal plane (perpendicular to palm)
-    angle = signed_angle_in_plane(ref_vector, thumb_vector, palm_normal)
+    ref_norm = vector_normalize(ref_proj)
+    thumb_norm = vector_normalize(thumb_proj)
 
-    return abs(angle)  # Return absolute value for abduction
+    dot = max(-1.0, min(1.0, vector_dot(ref_norm, thumb_norm)))
+    angle = math.acos(dot)
+
+    return angle
 
 
 def calculate_thumb_cmc_flexion(landmarks: Sequence[Tuple[float, float, float]]) -> float:
@@ -101,6 +107,27 @@ def calculate_thumb_cmc_flexion(landmarks: Sequence[Tuple[float, float, float]])
     return max(0.0, angle)  # Flexion is positive angle
 
 
+def calculate_thumb_yaw(landmarks: Sequence[Tuple[float, float, float]]) -> float:
+    """
+    Calculate thumb yaw based on thumb IP distance to palm plane.
+
+    Uses:
+        plane normal = cross(middle_mcp - wrist, index_mcp - pinky_mcp)
+        distance = |dot(thumb_ip - wrist, plane_normal_unit)|
+
+    Returns: distance in landmark units (mapped linearly by calibration)
+    """
+    thumb_ip = landmarks[LandmarkIndex.THUMB_IP]
+    middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
+    wrist = landmarks[LandmarkIndex.WRIST]
+    index_mcp = landmarks[LandmarkIndex.INDEX_MCP]
+    pinky_mcp = landmarks[LandmarkIndex.PINKY_MCP]
+
+    plane_normal_norm = palm_plane_normal(middle_mcp, wrist, index_mcp, pinky_mcp)
+    thumb_vec = vector_subtract(thumb_ip, wrist)
+    return abs(vector_dot(thumb_vec, plane_normal_norm))
+
+
 def calculate_thumb_mcp_flexion(landmarks: Sequence[Tuple[float, float, float]]) -> float:
     """
     Calculate thumb MCP (metacarpophalangeal) joint flexion angle.
@@ -113,28 +140,16 @@ def calculate_thumb_mcp_flexion(landmarks: Sequence[Tuple[float, float, float]])
     thumb_cmc = landmarks[LandmarkIndex.THUMB_CMC]
     thumb_mcp = landmarks[LandmarkIndex.THUMB_MCP]
     thumb_ip = landmarks[LandmarkIndex.THUMB_IP]
-    thumb_tip = landmarks[LandmarkIndex.THUMB_TIP] # noqa: F841
-    wrist = landmarks[LandmarkIndex.WRIST]
-    index_mcp = landmarks[LandmarkIndex.INDEX_MCP]
 
-    # Define rotation axis (perpendicular to thumb motion plane)
-    # Use palm normal as the rotation axis
-    middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
-    v1 = vector_subtract(index_mcp, wrist)
-    v2 = vector_subtract(middle_mcp, wrist)
-    rotation_axis = vector_normalize(vector_cross(v1, v2))
+    # Vectors: thumb CMC -> MCP and MCP -> IP
+    v1 = vector_subtract(thumb_cmc, thumb_mcp)
+    v2 = vector_subtract(thumb_ip, thumb_mcp)
 
-    # Proximal segment (CMC to MCP)
-    proximal = vector_subtract(thumb_mcp, thumb_cmc)
+    v1_norm = vector_normalize(v1)
+    v2_norm = vector_normalize(v2)
 
-    # Distal segment (MCP to IP)
-    distal = vector_subtract(thumb_ip, thumb_mcp)
-
-    # Calculate angle in the plane perpendicular to rotation axis
-    angle = signed_angle_in_plane(proximal, distal, rotation_axis)
-
-    # Return supplementary angle for flexion (π - angle)
-    return math.pi - max(0.0, min(math.pi, angle))
+    dot = max(-1.0, min(1.0, vector_dot(v1_norm, v2_norm)))
+    return math.acos(dot)
 
 
 def calculate_thumb_ip_flexion(landmarks: Sequence[Tuple[float, float, float]]) -> float:
@@ -149,26 +164,16 @@ def calculate_thumb_ip_flexion(landmarks: Sequence[Tuple[float, float, float]]) 
     thumb_mcp = landmarks[LandmarkIndex.THUMB_MCP]
     thumb_ip = landmarks[LandmarkIndex.THUMB_IP]
     thumb_tip = landmarks[LandmarkIndex.THUMB_TIP]
-    wrist = landmarks[LandmarkIndex.WRIST]
-    index_mcp = landmarks[LandmarkIndex.INDEX_MCP]
-    middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
 
-    # Define rotation axis using palm normal
-    v1 = vector_subtract(index_mcp, wrist)
-    v2 = vector_subtract(middle_mcp, wrist)
-    rotation_axis = vector_normalize(vector_cross(v1, v2))
+    # Vectors: IP -> tip and IP -> MCP
+    v1 = vector_subtract(thumb_tip, thumb_ip)
+    v2 = vector_subtract(thumb_mcp, thumb_ip)
 
-    # Proximal segment (MCP to IP)
-    proximal = vector_subtract(thumb_ip, thumb_mcp)
+    v1_norm = vector_normalize(v1)
+    v2_norm = vector_normalize(v2)
 
-    # Distal segment (IP to TIP)
-    distal = vector_subtract(thumb_tip, thumb_ip)
-
-    # Calculate angle in the plane perpendicular to rotation axis
-    angle = signed_angle_in_plane(proximal, distal, rotation_axis)
-
-    # Return supplementary angle for flexion
-    return math.pi - max(0.0, min(math.pi, angle))
+    dot = max(-1.0, min(1.0, vector_dot(v1_norm, v2_norm)))
+    return math.acos(dot)
 
 
 # ============================================================================
@@ -218,6 +223,39 @@ def calculate_finger_mcp_flexion(
     return angle
 
 
+def calculate_finger_spread(
+    landmarks: Sequence[Tuple[float, float, float]],
+    mcp_idx: int,
+    pip_idx: int
+) -> float:
+    """
+    Calculate finger spread angle in the palm plane.
+
+    Projects MCP->PIP and MCP->Wrist vectors onto the palm plane and
+    returns the unsigned angle between them.
+    """
+    wrist = landmarks[LandmarkIndex.WRIST]
+    mcp = landmarks[mcp_idx]
+    pip = landmarks[pip_idx]
+
+    middle_mcp = landmarks[LandmarkIndex.MIDDLE_MCP]
+    index_mcp = landmarks[LandmarkIndex.INDEX_MCP]
+    pinky_mcp = landmarks[LandmarkIndex.PINKY_MCP]
+    palm_normal = palm_plane_normal(middle_mcp, wrist, index_mcp, pinky_mcp)
+
+    v_spread = vector_subtract(pip, mcp)
+    v_ref = vector_subtract(mcp, wrist)
+
+    v_spread_proj = project_vector_onto_plane(v_spread, palm_normal)
+    v_ref_proj = project_vector_onto_plane(v_ref, palm_normal)
+
+    v_spread_norm = vector_normalize(v_spread_proj)
+    v_ref_norm = vector_normalize(v_ref_proj)
+
+    dot = max(-1.0, min(1.0, vector_dot(v_spread_norm, v_ref_norm)))
+    return math.acos(dot)
+
+
 def calculate_finger_pip_flexion(
     landmarks: Sequence[Tuple[float, float, float]],
     mcp_idx: int,
@@ -254,6 +292,7 @@ def calculate_finger_pip_flexion(
 
 def calculate_finger_dip_flexion(
     landmarks: Sequence[Tuple[float, float, float]],
+    mcp_idx: int,
     pip_idx: int,
     dip_idx: int,
     tip_idx: int
@@ -261,11 +300,11 @@ def calculate_finger_dip_flexion(
     """
     Calculate DIP joint flexion for a finger.
 
-    Measures angle between PIP→DIP and DIP→TIP segments.
+    Measures angle between MCP→DIP and DIP→TIP segments.
 
     Returns: angle in radians [0, π]
     """
-    pip = landmarks[pip_idx]
+    mcp = landmarks[mcp_idx]
     dip = landmarks[dip_idx]
     tip = landmarks[tip_idx]
 
@@ -274,14 +313,14 @@ def calculate_finger_dip_flexion(
     pinky_mcp = landmarks[LandmarkIndex.PINKY_MCP]
     rotation_axis = vector_normalize(vector_subtract(pinky_mcp, index_mcp))
 
-    # Middle phalanx (PIP to DIP)
-    middle = vector_subtract(dip, pip)
+    # MCP to DIP segment
+    vec2 = vector_subtract(dip, mcp)
 
-    # Distal phalanx (DIP to TIP)
-    distal = vector_subtract(tip, dip)
+    # DIP to TIP segment
+    vec1 = vector_subtract(tip, dip)
 
     # Calculate bending angle
-    angle = signed_angle_in_plane(middle, distal, rotation_axis)
+    angle = signed_angle_in_plane(vec2, vec1, rotation_axis)
 
     return math.pi - max(0.0, min(math.pi, angle))
 
@@ -298,6 +337,7 @@ def calculate_all_joint_angles(landmarks: Sequence[Tuple[float, float, float]]) 
     # Thumb joints (each calculated separately with vector projection)
     angles['thumb_cmc_abd'] = calculate_thumb_cmc_abduction(landmarks)
     angles['thumb_cmc_flex'] = calculate_thumb_cmc_flexion(landmarks)
+    angles['thumb_yaw'] = calculate_thumb_yaw(landmarks)
     angles['thumb_mcp'] = calculate_thumb_mcp_flexion(landmarks)
     angles['thumb_ip'] = calculate_thumb_ip_flexion(landmarks)
 
@@ -309,7 +349,10 @@ def calculate_all_joint_angles(landmarks: Sequence[Tuple[float, float, float]]) 
         landmarks, LandmarkIndex.INDEX_MCP, LandmarkIndex.INDEX_PIP, LandmarkIndex.INDEX_DIP
     )
     angles['index_dip'] = calculate_finger_dip_flexion(
-        landmarks, LandmarkIndex.INDEX_PIP, LandmarkIndex.INDEX_DIP, LandmarkIndex.INDEX_TIP
+        landmarks, LandmarkIndex.INDEX_MCP, LandmarkIndex.INDEX_PIP, LandmarkIndex.INDEX_DIP, LandmarkIndex.INDEX_TIP
+    )
+    angles['index_spread'] = calculate_finger_spread(
+        landmarks, LandmarkIndex.INDEX_MCP, LandmarkIndex.INDEX_PIP
     )
 
     # Middle finger
@@ -320,7 +363,10 @@ def calculate_all_joint_angles(landmarks: Sequence[Tuple[float, float, float]]) 
         landmarks, LandmarkIndex.MIDDLE_MCP, LandmarkIndex.MIDDLE_PIP, LandmarkIndex.MIDDLE_DIP
     )
     angles['middle_dip'] = calculate_finger_dip_flexion(
-        landmarks, LandmarkIndex.MIDDLE_PIP, LandmarkIndex.MIDDLE_DIP, LandmarkIndex.MIDDLE_TIP
+        landmarks, LandmarkIndex.MIDDLE_MCP, LandmarkIndex.MIDDLE_PIP, LandmarkIndex.MIDDLE_DIP, LandmarkIndex.MIDDLE_TIP
+    )
+    angles['middle_spread'] = calculate_finger_spread(
+        landmarks, LandmarkIndex.MIDDLE_MCP, LandmarkIndex.MIDDLE_PIP
     )
 
     # Ring finger
@@ -331,7 +377,10 @@ def calculate_all_joint_angles(landmarks: Sequence[Tuple[float, float, float]]) 
         landmarks, LandmarkIndex.RING_MCP, LandmarkIndex.RING_PIP, LandmarkIndex.RING_DIP
     )
     angles['ring_dip'] = calculate_finger_dip_flexion(
-        landmarks, LandmarkIndex.RING_PIP, LandmarkIndex.RING_DIP, LandmarkIndex.RING_TIP
+        landmarks, LandmarkIndex.RING_MCP, LandmarkIndex.RING_PIP, LandmarkIndex.RING_DIP, LandmarkIndex.RING_TIP
+    )
+    angles['ring_spread'] = calculate_finger_spread(
+        landmarks, LandmarkIndex.RING_MCP, LandmarkIndex.RING_PIP
     )
 
     # Pinky finger
@@ -342,7 +391,10 @@ def calculate_all_joint_angles(landmarks: Sequence[Tuple[float, float, float]]) 
         landmarks, LandmarkIndex.PINKY_MCP, LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_DIP
     )
     angles['pinky_dip'] = calculate_finger_dip_flexion(
-        landmarks, LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_DIP, LandmarkIndex.PINKY_TIP
+        landmarks, LandmarkIndex.PINKY_MCP, LandmarkIndex.PINKY_PIP, LandmarkIndex.PINKY_DIP, LandmarkIndex.PINKY_TIP
+    )
+    angles['pinky_spread'] = calculate_finger_spread(
+        landmarks, LandmarkIndex.PINKY_MCP, LandmarkIndex.PINKY_PIP
     )
 
     return angles
