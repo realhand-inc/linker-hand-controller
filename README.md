@@ -37,12 +37,14 @@ This script will:
 
 2. Create a virtual environment (recommended):
    ```bash
-   python3 -m venv venv
+   python3 -m venv venv #or
+   python -m venv venv
    ```
 
 3. Activate the virtual environment:
    ```bash
-   source venv/bin/activate
+   source venv/bin/activate #or
+   .\venv\Scripts\activate #for windows
    ```
 
 4. Install the required dependencies:
@@ -70,7 +72,8 @@ Edit LinkerHand/config/setting.yaml to match your setup.
 
 3. Run the GUI:
    ```bash
-   python3 l20_controller_gui.py
+   python3 l20_controller_gui.p #or
+   python l20_controller_gui.py 
    ```
  
 
