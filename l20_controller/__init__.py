@@ -1,2 +1,2 @@
 from .kinematics import calculate_all_joint_angles, angles_to_l20_pose
-from .network import parse_landmarks
+from .network import parse_landmarks, parse_landmarks_dual

@@ -125,17 +125,30 @@ class L20ControllerGUI:
         self.root.title("L20 Hand Controller - Calibration Interface")
         self.root.geometry("1800x1200")
 
+        # Shared calibration between both hands
         self.calibration = CalibrationData()
-        self.current_angles: Dict[str, float] = {}
-        self.current_pose: List[int] = [255] * 20
 
-        # Track which motors are enabled for sending to robot
-        self.motor_enabled: Dict[str, bool] = {
+        # Left hand state
+        self.left_active: bool = False
+        self.left_can_interface: str = "can0"
+        self._left_hand_instance: Optional[LinkerHandApi] = None
+        self.left_current_angles: Dict[str, float] = {}
+        self.left_current_pose: List[int] = [255] * 20
+        self.left_last_sent_pose: List[int] = [255] * 20
+        self.left_motor_enabled: Dict[str, bool] = {
             name: True for name in self.calibration.motor_names
         }
 
-        # Track last sent pose to maintain positions of disabled joints
-        self.last_sent_pose: List[int] = [255] * 20
+        # Right hand state
+        self.right_active: bool = False
+        self.right_can_interface: str = "can0"
+        self._right_hand_instance: Optional[LinkerHandApi] = None
+        self.right_current_angles: Dict[str, float] = {}
+        self.right_current_pose: List[int] = [255] * 20
+        self.right_last_sent_pose: List[int] = [255] * 20
+        self.right_motor_enabled: Dict[str, bool] = {
+            name: True for name in self.calibration.motor_names
+        }
 
         # Preset gesture poses
         self.preset_poses = {
@@ -175,9 +188,6 @@ class L20ControllerGUI:
             "vec2_norm": tk.StringVar(value="(0.0000, 0.0000, 0.0000)"),
             "angle_rad": tk.StringVar(value="0.0000 rad (0.00°)"),
         }
-
-        # Hand instance reference for preset commands
-        self._hand_instance = None
 
         self.running = False
         self.control_thread: Optional[threading.Thread] = None
@@ -249,19 +259,24 @@ class L20ControllerGUI:
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
 
-        angles_tab = ttk.Frame(self.notebook)
+        left_angles_tab = ttk.Frame(self.notebook)
+        right_angles_tab = ttk.Frame(self.notebook)
         debug_tab = ttk.Frame(self.notebook)
 
-        self.notebook.add(angles_tab, text="Joint Angles")
+        self.notebook.add(left_angles_tab, text="Left Hand Angles")
+        self.notebook.add(right_angles_tab, text="Right Hand Angles")
         self.notebook.add(debug_tab, text="Debug")
 
-        angles_tab.columnconfigure(0, weight=1)
-        angles_tab.rowconfigure(0, weight=1)
+        left_angles_tab.columnconfigure(0, weight=1)
+        left_angles_tab.rowconfigure(0, weight=1)
+        right_angles_tab.columnconfigure(0, weight=1)
+        right_angles_tab.rowconfigure(0, weight=1)
         debug_tab.columnconfigure(0, weight=1)
         debug_tab.rowconfigure(0, weight=1)
 
-        # Joint angles display
-        self._create_angles_display(angles_tab)
+        # Joint angles display for each hand
+        self._create_angles_display(left_angles_tab, hand_type="left")
+        self._create_angles_display(right_angles_tab, hand_type="right")
         self._create_debug_display(debug_tab)
 
         # Status bar
@@ -270,43 +285,109 @@ class L20ControllerGUI:
         self.status_label.grid(row=3, column=0, sticky=(tk.W, tk.E), pady=(10, 0))
 
     def _create_control_panel(self, parent: ttk.Frame):
-        """Create control buttons panel."""
+        """Create control buttons panel with dual hand activation."""
         control_frame = ttk.LabelFrame(parent, text="Control", padding="10")
         control_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=(0, 10))
 
-        # Start/Stop button
-        self.start_button = ttk.Button(control_frame, text="Start Controller",
-                                       command=self.start_controller, width=20)
-        self.start_button.grid(row=0, column=0, padx=5)
+        # Left Hand Section
+        ttk.Label(control_frame, text="Left Hand:", font=('Arial', 10, 'bold')).grid(
+            row=0, column=0, padx=5, sticky=tk.W
+        )
+        ttk.Label(control_frame, text="CAN:").grid(row=0, column=1, padx=(0, 2))
+        self.left_can_entry = ttk.Entry(control_frame, width=10)
+        self.left_can_entry.insert(0, "can0")
+        self.left_can_entry.grid(row=0, column=2, padx=(0, 5))
 
-        self.stop_button = ttk.Button(control_frame, text="Stop Controller",
-                                      command=self.stop_controller, width=20,
-                                      state=tk.DISABLED)
-        self.stop_button.grid(row=0, column=1, padx=5)
+        self.left_activate_button = ttk.Button(
+            control_frame, text="Activate Left",
+            command=self.activate_left_hand, width=15
+        )
+        self.left_activate_button.grid(row=0, column=3, padx=5)
 
-        # Calibration buttons
-        ttk.Separator(control_frame, orient=tk.VERTICAL).grid(
-            row=0, column=2, sticky=(tk.N, tk.S), padx=10
+        self.left_deactivate_button = ttk.Button(
+            control_frame, text="Deactivate Left",
+            command=self.deactivate_left_hand, width=15,
+            state=tk.DISABLED
+        )
+        self.left_deactivate_button.grid(row=0, column=4, padx=5)
+
+        # Right Hand Section
+        ttk.Label(control_frame, text="Right Hand:", font=('Arial', 10, 'bold')).grid(
+            row=1, column=0, padx=5, sticky=tk.W
+        )
+        ttk.Label(control_frame, text="CAN:").grid(row=1, column=1, padx=(0, 2))
+        self.right_can_entry = ttk.Entry(control_frame, width=10)
+        self.right_can_entry.insert(0, "can0")
+        self.right_can_entry.grid(row=1, column=2, padx=(0, 5))
+
+        self.right_activate_button = ttk.Button(
+            control_frame, text="Activate Right",
+            command=self.activate_right_hand, width=15
+        )
+        self.right_activate_button.grid(row=1, column=3, padx=5)
+
+        self.right_deactivate_button = ttk.Button(
+            control_frame, text="Deactivate Right",
+            command=self.deactivate_right_hand, width=15,
+            state=tk.DISABLED
+        )
+        self.right_deactivate_button.grid(row=1, column=4, padx=5)
+
+        # Separator
+        ttk.Separator(control_frame, orient=tk.HORIZONTAL).grid(
+            row=2, column=0, columnspan=6, sticky=(tk.W, tk.E), pady=10
         )
 
-        self.cal_min_button = ttk.Button(control_frame, text="Calibrate MIN",
-                                         command=self.calibrate_min, width=20,
-                                         state=tk.DISABLED)
-        self.cal_min_button.grid(row=0, column=3, padx=5)
+        # Controller Section
+        ttk.Label(control_frame, text="Controller:", font=('Arial', 10, 'bold')).grid(
+            row=3, column=0, padx=5, sticky=tk.W
+        )
 
-        self.cal_max_button = ttk.Button(control_frame, text="Calibrate MAX",
-                                         command=self.calibrate_max, width=20,
-                                         state=tk.DISABLED)
-        self.cal_max_button.grid(row=0, column=4, padx=5)
+        self.start_button = ttk.Button(
+            control_frame, text="Start Controller",
+            command=self.start_controller, width=20
+        )
+        self.start_button.grid(row=3, column=1, columnspan=2, padx=5)
 
-        # Reset calibration
-        self.reset_cal_button = ttk.Button(control_frame, text="Reset Calibration",
-                                           command=self.reset_calibration, width=20)
-        self.reset_cal_button.grid(row=0, column=5, padx=5)
+        self.stop_button = ttk.Button(
+            control_frame, text="Stop Controller",
+            command=self.stop_controller, width=20,
+            state=tk.DISABLED
+        )
+        self.stop_button.grid(row=3, column=3, padx=5)
 
-    def _create_angles_display(self, parent: ttk.Frame):
-        """Create joint angles display table."""
-        display_frame = ttk.LabelFrame(parent, text="Joint Angles", padding="10")
+        # Calibration Section
+        ttk.Separator(control_frame, orient=tk.VERTICAL).grid(
+            row=3, column=4, rowspan=2, sticky=(tk.N, tk.S), padx=10
+        )
+
+        self.cal_min_button = ttk.Button(
+            control_frame, text="Calibrate MIN (Shared)",
+            command=self.calibrate_min, width=22,
+            state=tk.DISABLED
+        )
+        self.cal_min_button.grid(row=3, column=5, padx=5)
+
+        self.cal_max_button = ttk.Button(
+            control_frame, text="Calibrate MAX (Shared)",
+            command=self.calibrate_max, width=22,
+            state=tk.DISABLED
+        )
+        self.cal_max_button.grid(row=4, column=5, padx=5, pady=(5, 0))
+
+        self.reset_cal_button = ttk.Button(
+            control_frame, text="Reset Calibration",
+            command=self.reset_calibration, width=22
+        )
+        self.reset_cal_button.grid(row=3, column=6, rowspan=2, padx=5)
+
+    def _create_angles_display(self, parent: ttk.Frame, hand_type: str):
+        """Create joint angles display table for a specific hand."""
+        display_frame = ttk.LabelFrame(
+            parent,
+            text=f"{hand_type.title()} Hand Joint Angles",
+            padding="10"
+        )
         display_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         display_frame.columnconfigure(0, weight=1)
         display_frame.rowconfigure(0, weight=1)
@@ -318,74 +399,92 @@ class L20ControllerGUI:
 
         # Create Treeview
         columns = ('enabled', 'recv_deg', 'raw_deg', 'cal_min', 'cal_max', 'remapped_deg', 'motor', 'goto_min', 'goto_max')
-        self.tree = ttk.Treeview(display_frame, columns=columns, height=22)
+        tree = ttk.Treeview(display_frame, columns=columns, height=22)
+
+        # Store tree reference based on hand type
+        if hand_type == "left":
+            self.left_tree = tree
+        else:
+            self.right_tree = tree
 
         # Define headings
-        self.tree.heading('#0', text='Joint')
-        self.tree.heading('enabled', text='Enabled')
-        self.tree.heading('recv_deg', text='Recv (°)')
-        self.tree.heading('raw_deg', text='Sent (°)')
-        self.tree.heading('cal_min', text='Min (°)')
-        self.tree.heading('cal_max', text='Max (°)')
-        self.tree.heading('remapped_deg', text='Map (°)')
-        self.tree.heading('motor', text='Motor')
-        self.tree.heading('goto_min', text='Go Min')
-        self.tree.heading('goto_max', text='Go Max')
+        tree.heading('#0', text='Joint')
+        tree.heading('enabled', text='Enabled')
+        tree.heading('recv_deg', text='Recv (°)')
+        tree.heading('raw_deg', text='Sent (°)')
+        tree.heading('cal_min', text='Min (°)')
+        tree.heading('cal_max', text='Max (°)')
+        tree.heading('remapped_deg', text='Map (°)')
+        tree.heading('motor', text='Motor')
+        tree.heading('goto_min', text='Go Min')
+        tree.heading('goto_max', text='Go Max')
 
         # Define column widths - increased for better visibility
-        self.tree.column('#0', width=140, anchor=tk.W)
-        self.tree.column('enabled', width=60, anchor=tk.CENTER)
-        self.tree.column('recv_deg', width=80, anchor=tk.CENTER)
-        self.tree.column('raw_deg', width=80, anchor=tk.CENTER)
-        self.tree.column('cal_min', width=75, anchor=tk.CENTER)
-        self.tree.column('cal_max', width=75, anchor=tk.CENTER)
-        self.tree.column('remapped_deg', width=75, anchor=tk.CENTER)
-        self.tree.column('motor', width=75, anchor=tk.CENTER)
-        self.tree.column('goto_min', width=75, anchor=tk.CENTER)
-        self.tree.column('goto_max', width=75, anchor=tk.CENTER)
+        tree.column('#0', width=140, anchor=tk.W)
+        tree.column('enabled', width=60, anchor=tk.CENTER)
+        tree.column('recv_deg', width=80, anchor=tk.CENTER)
+        tree.column('raw_deg', width=80, anchor=tk.CENTER)
+        tree.column('cal_min', width=75, anchor=tk.CENTER)
+        tree.column('cal_max', width=75, anchor=tk.CENTER)
+        tree.column('remapped_deg', width=75, anchor=tk.CENTER)
+        tree.column('motor', width=75, anchor=tk.CENTER)
+        tree.column('goto_min', width=75, anchor=tk.CENTER)
+        tree.column('goto_max', width=75, anchor=tk.CENTER)
 
         # Scrollbar
         scrollbar = ttk.Scrollbar(display_frame, orient=tk.VERTICAL,
-                                  command=self.tree.yview)
-        self.tree.configure(yscrollcommand=scrollbar.set)
+                                  command=tree.yview)
+        tree.configure(yscrollcommand=scrollbar.set)
 
-        self.tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+        tree.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
 
         # Add Activate/Deactivate All buttons
         button_frame = ttk.Frame(display_frame)
         button_frame.grid(row=1, column=0, columnspan=2, pady=(10, 0), sticky=tk.W)
 
-        self.activate_all_button = ttk.Button(button_frame, text="Activate All Joints",
-                                              command=self.activate_all_joints, width=20)
-        self.activate_all_button.grid(row=0, column=0, padx=5)
+        activate_all_button = ttk.Button(
+            button_frame, text="Activate All Joints",
+            command=lambda: self.activate_all_joints(hand_type), width=20
+        )
+        activate_all_button.grid(row=0, column=0, padx=5)
 
-        self.deactivate_all_button = ttk.Button(button_frame, text="Deactivate All Joints",
-                                                command=self.deactivate_all_joints, width=20)
-        self.deactivate_all_button.grid(row=0, column=1, padx=5)
+        deactivate_all_button = ttk.Button(
+            button_frame, text="Deactivate All Joints",
+            command=lambda: self.deactivate_all_joints(hand_type), width=20
+        )
+        deactivate_all_button.grid(row=0, column=1, padx=5)
 
         # Add Preset Gestures label and buttons
         preset_label = ttk.Label(button_frame, text="Preset Gestures:", font=('Arial', 10, 'bold'))
         preset_label.grid(row=1, column=0, columnspan=2, pady=(10, 5), sticky=tk.W)
 
-        self.preset_fist_button = ttk.Button(button_frame, text="握拳 (Fist)",
-                                             command=lambda: self.apply_preset("握拳"), width=15)
-        self.preset_fist_button.grid(row=2, column=0, padx=5, pady=2)
+        preset_fist_button = ttk.Button(
+            button_frame, text="握拳 (Fist)",
+            command=lambda: self.apply_preset("握拳", hand_type), width=15
+        )
+        preset_fist_button.grid(row=2, column=0, padx=5, pady=2)
 
-        self.preset_open_button = ttk.Button(button_frame, text="张开 (Open)",
-                                             command=lambda: self.apply_preset("张开"), width=15)
-        self.preset_open_button.grid(row=2, column=1, padx=5, pady=2)
+        preset_open_button = ttk.Button(
+            button_frame, text="张开 (Open)",
+            command=lambda: self.apply_preset("张开", hand_type), width=15
+        )
+        preset_open_button.grid(row=2, column=1, padx=5, pady=2)
 
-        self.preset_ok_button = ttk.Button(button_frame, text="OK",
-                                           command=lambda: self.apply_preset("OK"), width=15)
-        self.preset_ok_button.grid(row=3, column=0, padx=5, pady=2)
+        preset_ok_button = ttk.Button(
+            button_frame, text="OK",
+            command=lambda: self.apply_preset("OK", hand_type), width=15
+        )
+        preset_ok_button.grid(row=3, column=0, padx=5, pady=2)
 
-        self.preset_thumbsup_button = ttk.Button(button_frame, text="点赞 (Thumbs Up)",
-                                                 command=lambda: self.apply_preset("点赞"), width=15)
-        self.preset_thumbsup_button.grid(row=3, column=1, padx=5, pady=2)
+        preset_thumbsup_button = ttk.Button(
+            button_frame, text="点赞 (Thumbs Up)",
+            command=lambda: self.apply_preset("点赞", hand_type), width=15
+        )
+        preset_thumbsup_button.grid(row=3, column=1, padx=5, pady=2)
 
         # Populate joint names
-        self._populate_joint_tree()
+        self._populate_joint_tree(tree, hand_type)
 
     def _create_debug_display(self, parent: ttk.Frame):
         """Create debug display tab."""
@@ -449,7 +548,7 @@ class L20ControllerGUI:
             f"{angle_rad:.4f} rad ({math.degrees(angle_rad):.2f}°)"
         )
 
-    def _populate_joint_tree(self):
+    def _populate_joint_tree(self, tree: ttk.Treeview, hand_type: str):
         """Populate the tree with motor names grouped by finger."""
         finger_groups = [
             "Thumb",
@@ -462,7 +561,7 @@ class L20ControllerGUI:
 
         for finger_name in finger_groups:
             # Insert parent (finger name)
-            parent = self.tree.insert('', tk.END, text=finger_name,
+            parent = tree.insert('', tk.END, text=finger_name,
                                       values=('\u2713', '', '', '', '', '', '', '[MIN]', '[MAX]'),
                                       tags=('parent',))
 
@@ -476,17 +575,18 @@ class L20ControllerGUI:
                 motor_desc = motor_name.replace('_', ' ').title()
                 display_name = f"  Motor {motor_idx}: {motor_desc}"
 
-                self.tree.insert(parent, tk.END, iid=motor_name, text=display_name,
+                # Namespace tree item IDs with hand type
+                tree.insert(parent, tk.END, iid=f"{hand_type}_{motor_name}", text=display_name,
                                 values=('\u2713', '0.0', '0.0', '0.0', '180.0', '0.0', '255', '[MIN]', '[MAX]'))
 
             # Expand all sections by default
-            self.tree.item(parent, open=True)
+            tree.item(parent, open=True)
 
         # Tag configuration for styling
-        self.tree.tag_configure('parent', font=('Arial', 11, 'bold'), foreground='#0066cc')
+        tree.tag_configure('parent', font=('Arial', 11, 'bold'), foreground='#0066cc')
 
-        # Bind click event for toggling enabled state
-        self.tree.bind('<Button-1>', self._on_tree_click)
+        # Bind click event for toggling enabled state with hand type
+        tree.bind('<Button-1>', lambda event: self._on_tree_click(event, hand_type, tree))
 
     def _get_finger_motors(self, finger_name: str) -> List[str]:
         """Get list of motor names for a given finger (spread on top)."""
@@ -500,16 +600,23 @@ class L20ControllerGUI:
         }
         return finger_map.get(finger_name, [])
 
-    def _go_to_motor_limit(self, motor_name: str, is_min: bool):
+    def _go_to_motor_limit(self, motor_name: str, is_min: bool, hand_type: str):
         """
-        Move a specific motor to limit (0 or 255).
+        Move a specific motor to limit (0 or 255) for specific hand.
 
         Args:
             motor_name: Name of the motor to move
             is_min: True to go to motor 0 (fully flexed), False to go to motor 255 (fully extended)
+            hand_type: "left" or "right"
         """
-        if not self.running or not self._hand_instance:
-            self.status_label.config(text="Status: Please start controller before moving motors")
+        # Get hand-specific state
+        active = self.left_active if hand_type == "left" else self.right_active
+        hand_instance = self._left_hand_instance if hand_type == "left" else self._right_hand_instance
+
+        if not active or not hand_instance:
+            self.status_label.config(
+                text=f"Status: Please activate {hand_type} hand before moving motors"
+            )
             return
 
         # Set motor value to 0 (min/flexed) or 255 (max/extended)
@@ -518,60 +625,77 @@ class L20ControllerGUI:
         # Get pose index for this motor (1:1 mapping)
         motor_idx = self._get_pose_index_for_motor(motor_name)
 
-        # Update the motor position in last_sent_pose and current_pose
-        self.last_sent_pose[motor_idx] = motor_value
-        self.current_pose[motor_idx] = motor_value
+        # Update the motor position in hand-specific pose
+        if hand_type == "left":
+            self.left_last_sent_pose[motor_idx] = motor_value
+            self.left_current_pose[motor_idx] = motor_value
+            pose_to_send = self.left_last_sent_pose
+        else:
+            self.right_last_sent_pose[motor_idx] = motor_value
+            self.right_current_pose[motor_idx] = motor_value
+            pose_to_send = self.right_last_sent_pose
 
         # Send the updated pose
         try:
-            self._hand_instance.finger_move(pose=self.last_sent_pose)
+            hand_instance.finger_move(pose=pose_to_send)
             limit_type = "MIN (0)" if is_min else "MAX (255)"
             self.status_label.config(
-                text=f"Status: Moved {motor_name} (motor {motor_idx}) to {limit_type}"
+                text=f"Status: Moved {hand_type} hand {motor_name} (motor {motor_idx}) to {limit_type}"
             )
             # Update display immediately
-            self.update_angles_display()
-        except Exception as e:  # noqa: BLE001
-            print(f"Error moving motor: {e}")
-            self.status_label.config(text=f"Status: Error moving motor - {e}")
+            self.update_angles_display(hand_type)
+        except Exception as e:
+            print(f"Error moving {hand_type} hand motor: {e}")
+            self.status_label.config(text=f"Status: Error moving {hand_type} hand motor - {e}")
 
     def _get_pose_index_for_motor(self, motor_name: str) -> int:
         """Get pose index for a motor (1:1 mapping)."""
         # Direct 1:1 mapping - motor name index = pose index
         return self.calibration.motor_names.index(motor_name)
 
-    def _on_tree_click(self, event):
+    def _on_tree_click(self, event, hand_type: str, tree: ttk.Treeview):
         """Handle click events on the tree to toggle enabled state or go to min/max."""
         # Identify which column was clicked
-        column = self.tree.identify_column(event.x)
+        column = tree.identify_column(event.x)
 
         # Identify which row was clicked
-        row_id = self.tree.identify_row(event.y)
+        row_id = tree.identify_row(event.y)
         if not row_id:
             return
 
+        # Get hand-specific state
+        motor_enabled = self.left_motor_enabled if hand_type == "left" else self.right_motor_enabled
+
+        # Extract motor name from row_id (format: "left_thumb_base" or "right_index_tip")
+        if row_id.startswith(f"{hand_type}_"):
+            motor_name = row_id[len(f"{hand_type}_"):]
+        else:
+            motor_name = None
+
         # Handle "Go to Min" column (#8)
         if column == '#8':
-            if row_id in self.calibration.motor_names:
+            if motor_name and motor_name in self.calibration.motor_names:
                 # Individual motor - go to min
-                self._go_to_motor_limit(row_id, is_min=True)
+                self._go_to_motor_limit(motor_name, is_min=True, hand_type=hand_type)
             else:
                 # Parent row (finger group) - go to min for all motors
-                motors = self._get_finger_motors(self.tree.item(row_id)['text'])
+                finger_name = tree.item(row_id)['text']
+                motors = self._get_finger_motors(finger_name)
                 for motor in motors:
-                    self._go_to_motor_limit(motor, is_min=True)
+                    self._go_to_motor_limit(motor, is_min=True, hand_type=hand_type)
             return
 
         # Handle "Go to Max" column (#9)
         if column == '#9':
-            if row_id in self.calibration.motor_names:
+            if motor_name and motor_name in self.calibration.motor_names:
                 # Individual motor - go to max
-                self._go_to_motor_limit(row_id, is_min=False)
+                self._go_to_motor_limit(motor_name, is_min=False, hand_type=hand_type)
             else:
                 # Parent row (finger group) - go to max for all motors
-                motors = self._get_finger_motors(self.tree.item(row_id)['text'])
+                finger_name = tree.item(row_id)['text']
+                motors = self._get_finger_motors(finger_name)
                 for motor in motors:
-                    self._go_to_motor_limit(motor, is_min=False)
+                    self._go_to_motor_limit(motor, is_min=False, hand_type=hand_type)
             return
 
         # Handle enabled/disabled toggle (#1)
@@ -579,41 +703,45 @@ class L20ControllerGUI:
             return
 
         # Check if it's a parent (finger group) or child (individual motor)
-        if row_id in self.calibration.motor_names:
+        if motor_name and motor_name in self.calibration.motor_names:
             # Individual motor
-            self.motor_enabled[row_id] = not self.motor_enabled[row_id]
+            motor_enabled[motor_name] = not motor_enabled[motor_name]
         else:
             # Parent row (finger group)
-            motors = self._get_finger_motors(self.tree.item(row_id)['text'])
+            finger_name = tree.item(row_id)['text']
+            motors = self._get_finger_motors(finger_name)
             # Toggle all children - if any are disabled, enable all; otherwise disable all
-            any_disabled = any(not self.motor_enabled.get(m, True) for m in motors)
+            any_disabled = any(not motor_enabled.get(m, True) for m in motors)
             new_state = True if any_disabled else False
             for motor in motors:
-                self.motor_enabled[motor] = new_state
+                motor_enabled[motor] = new_state
 
         # Update the display
-        self._update_tree_enabled_display()
+        self._update_tree_enabled_display(tree, hand_type)
 
-    def _update_tree_enabled_display(self):
+    def _update_tree_enabled_display(self, tree: ttk.Treeview, hand_type: str):
         """Refresh the enabled column display for all items."""
+        # Get hand-specific state
+        motor_enabled = self.left_motor_enabled if hand_type == "left" else self.right_motor_enabled
+
         # Update individual motors
         for motor_name in self.calibration.motor_names:
-            enabled = self.motor_enabled.get(motor_name, True)
+            enabled = motor_enabled.get(motor_name, True)
             symbol = '\u2713' if enabled else '\u2717'  # ✓ or ✗
-            current_values = list(self.tree.item(motor_name)['values'])
-            current_values[0] = symbol
             try:
-                self.tree.item(motor_name, values=current_values)
+                current_values = list(tree.item(f"{hand_type}_{motor_name}")['values'])
+                current_values[0] = symbol
+                tree.item(f"{hand_type}_{motor_name}", values=current_values)
             except tk.TclError:
                 pass
 
         # Update parent rows
         finger_groups = ["Thumb", "Index", "Middle", "Ring", "Pinky", "Reserved"]
-        for item in self.tree.get_children():
-            finger_name = self.tree.item(item)['text']
+        for item in tree.get_children():
+            finger_name = tree.item(item)['text']
             if finger_name in finger_groups:
                 motors = self._get_finger_motors(finger_name)
-                enabled_count = sum(1 for m in motors if self.motor_enabled.get(m, True))
+                enabled_count = sum(1 for m in motors if motor_enabled.get(m, True))
                 if enabled_count == len(motors):
                     symbol = '\u2713'  # All enabled
                 elif enabled_count == 0:
@@ -621,72 +749,102 @@ class L20ControllerGUI:
                 else:
                     symbol = '\u2212'  # Mixed (−)
 
-                current_values = list(self.tree.item(item)['values'])
+                current_values = list(tree.item(item)['values'])
                 current_values[0] = symbol
                 try:
-                    self.tree.item(item, values=current_values)
+                    tree.item(item, values=current_values)
                 except tk.TclError:
                     pass
 
-    def activate_all_joints(self):
-        """Enable all motors."""
+    def activate_all_joints(self, hand_type: str):
+        """Enable all motors for specific hand."""
+        motor_enabled = self.left_motor_enabled if hand_type == "left" else self.right_motor_enabled
+        tree = self.left_tree if hand_type == "left" else self.right_tree
+
         for motor_name in self.calibration.motor_names:
-            self.motor_enabled[motor_name] = True
-        self._update_tree_enabled_display()
+            motor_enabled[motor_name] = True
+        self._update_tree_enabled_display(tree, hand_type)
 
         # Update status to indicate tracking resumed
         if self.running:
             self.status_label.config(text="Status: Running - MediaPipe tracking resumed")
 
-    def deactivate_all_joints(self):
-        """Disable all motors."""
-        for motor_name in self.calibration.motor_names:
-            self.motor_enabled[motor_name] = False
-        self._update_tree_enabled_display()
+    def deactivate_all_joints(self, hand_type: str):
+        """Disable all motors for specific hand."""
+        motor_enabled = self.left_motor_enabled if hand_type == "left" else self.right_motor_enabled
+        tree = self.left_tree if hand_type == "left" else self.right_tree
 
-    def apply_preset(self, gesture_name: str):
-        """Apply a preset gesture pose to the hand."""
+        for motor_name in self.calibration.motor_names:
+            motor_enabled[motor_name] = False
+        self._update_tree_enabled_display(tree, hand_type)
+
+    def apply_preset(self, gesture_name: str, hand_type: str):
+        """Apply a preset gesture pose to specific hand."""
         if gesture_name not in self.preset_poses:
+            return
+
+        # Get hand-specific state
+        active = self.left_active if hand_type == "left" else self.right_active
+        hand_instance = self._left_hand_instance if hand_type == "left" else self._right_hand_instance
+
+        if not active or not hand_instance:
+            self.status_label.config(
+                text=f"Status: Error - {hand_type.title()} hand not activated"
+            )
             return
 
         preset_pose = self.preset_poses[gesture_name]
 
-        # Send preset pose to hand if controller is running
-        if self.running and self._hand_instance:
-            try:
-                self._hand_instance.finger_move(pose=preset_pose)
-            except Exception as e:  # noqa: BLE001
-                print(f"Error sending preset: {e}")
-        elif not self.running:
-            # Show warning if controller is not running
-            self.status_label.config(text="Status: Please start controller before applying presets")
+        # Send preset pose to hand
+        try:
+            hand_instance.finger_move(pose=preset_pose)
+        except Exception as e:
+            print(f"Error sending preset to {hand_type} hand: {e}")
             return
 
-        # Update last sent pose and current pose
-        self.last_sent_pose = preset_pose.copy()
-        self.current_pose = preset_pose.copy()
+        # Update last sent pose and current pose for this hand
+        if hand_type == "left":
+            self.left_last_sent_pose = preset_pose.copy()
+            self.left_current_pose = preset_pose.copy()
+        else:
+            self.right_last_sent_pose = preset_pose.copy()
+            self.right_current_pose = preset_pose.copy()
 
         # Deactivate all joints to pause MediaPipe tracking
-        self.deactivate_all_joints()
+        self.deactivate_all_joints(hand_type)
 
         # Update display immediately
-        self.update_angles_display()
+        self.update_angles_display(hand_type)
 
         # Update status
-        self.status_label.config(text=f"Status: Preset '{gesture_name}' applied - Click 'Activate All' to resume tracking")
+        self.status_label.config(
+            text=f"Status: Preset '{gesture_name}' applied to {hand_type} hand - Click 'Activate All' to resume tracking"
+        )
 
-    def update_angles_display(self):
-        """Update the angles display with current motor values."""
+    def update_angles_display(self, hand_type: str):
+        """Update the angles display with current motor values for specific hand."""
+        # Get hand-specific state
+        if hand_type == "left":
+            tree = self.left_tree
+            current_pose = self.left_current_pose
+            current_angles = self.left_current_angles
+            motor_enabled = self.left_motor_enabled
+        else:
+            tree = self.right_tree
+            current_pose = self.right_current_pose
+            current_angles = self.right_current_angles
+            motor_enabled = self.right_motor_enabled
+
         # Display motor values directly from current_pose (20 motors)
         for motor_name in self.calibration.motor_names:
             motor_idx = self._get_pose_index_for_motor(motor_name)
-            motor_value = self.current_pose[motor_idx]
+            motor_value = current_pose[motor_idx]
 
             cal_min = self.calibration.min_values[motor_name]
             cal_max = self.calibration.max_values[motor_name]
 
             # Received aggregated angle for this motor
-            recv_angle = self.current_angles.get(motor_name, 0.0)
+            recv_angle = current_angles.get(motor_name, 0.0)
             recv_deg = math.degrees(recv_angle)
 
             # Motor to angle: 255 -> 0, 0 -> PI
@@ -702,7 +860,7 @@ class L20ControllerGUI:
                 map_deg = 0.0
 
             # Get enabled status
-            enabled = self.motor_enabled.get(motor_name, True)
+            enabled = motor_enabled.get(motor_name, True)
             enabled_symbol = '\u2713' if enabled else '\u2717'  # ✓ or ✗
 
             values = (
@@ -718,17 +876,17 @@ class L20ControllerGUI:
             )
 
             try:
-                self.tree.item(motor_name, values=values)
+                tree.item(f"{hand_type}_{motor_name}", values=values)
             except tk.TclError:
                 pass  # Motor not in tree yet
 
         # Update parent rows to show aggregated enabled status
         finger_groups = ["Thumb", "Index", "Middle", "Ring", "Pinky", "Reserved"]
-        for item in self.tree.get_children():
-            finger_name = self.tree.item(item)['text']
+        for item in tree.get_children():
+            finger_name = tree.item(item)['text']
             if finger_name in finger_groups:
                 motors = self._get_finger_motors(finger_name)
-                enabled_count = sum(1 for m in motors if self.motor_enabled.get(m, True))
+                enabled_count = sum(1 for m in motors if motor_enabled.get(m, True))
                 if enabled_count == len(motors):
                     symbol = '\u2713'  # All enabled
                 elif enabled_count == 0:
@@ -736,17 +894,126 @@ class L20ControllerGUI:
                 else:
                     symbol = '\u2212'  # Mixed (−)
 
-                current_values = list(self.tree.item(item)['values'])
+                current_values = list(tree.item(item)['values'])
                 if current_values:
                     current_values[0] = symbol
                     try:
-                        self.tree.item(item, values=current_values)
+                        tree.item(item, values=current_values)
                     except tk.TclError:
                         pass
 
+    def activate_left_hand(self):
+        """Activate left hand - initialize hardware connection."""
+        if self.left_active:
+            self.status_label.config(text="Status: Left hand already active")
+            return
+
+        can_interface = self.left_can_entry.get().strip()
+        if not can_interface:
+            self.status_label.config(text="Status: Error - Please specify CAN interface for left hand")
+            return
+
+        self.left_can_interface = can_interface
+
+        try:
+            self._left_hand_instance = LinkerHandApi(
+                hand_type="left",
+                hand_joint="L20",
+                can=self.left_can_interface
+            )
+            self._left_hand_instance.set_speed([255, 255, 255, 255, 255])
+
+            self.left_active = True
+            self.left_activate_button.config(state=tk.DISABLED)
+            self.left_deactivate_button.config(state=tk.NORMAL)
+            self.left_can_entry.config(state=tk.DISABLED)
+
+            self.status_label.config(text=f"Status: Left hand activated on {self.left_can_interface}")
+
+        except Exception as e:
+            self.status_label.config(text=f"Status: Error activating left hand - {str(e)}")
+            self._left_hand_instance = None
+            self.left_active = False
+
+    def deactivate_left_hand(self):
+        """Deactivate left hand - close hardware connection."""
+        if not self.left_active:
+            return
+
+        if self._left_hand_instance:
+            try:
+                self._left_hand_instance.close_can()
+            except Exception:
+                pass
+            self._left_hand_instance = None
+
+        self.left_active = False
+        self.left_activate_button.config(state=tk.NORMAL)
+        self.left_deactivate_button.config(state=tk.DISABLED)
+        self.left_can_entry.config(state=tk.NORMAL)
+        self.status_label.config(text="Status: Left hand deactivated")
+
+    def activate_right_hand(self):
+        """Activate right hand - initialize hardware connection."""
+        if self.right_active:
+            self.status_label.config(text="Status: Right hand already active")
+            return
+
+        can_interface = self.right_can_entry.get().strip()
+        if not can_interface:
+            self.status_label.config(text="Status: Error - Please specify CAN interface for right hand")
+            return
+
+        self.right_can_interface = can_interface
+
+        try:
+            self._right_hand_instance = LinkerHandApi(
+                hand_type="right",
+                hand_joint="L20",
+                can=self.right_can_interface
+            )
+            self._right_hand_instance.set_speed([255, 255, 255, 255, 255])
+
+            self.right_active = True
+            self.right_activate_button.config(state=tk.DISABLED)
+            self.right_deactivate_button.config(state=tk.NORMAL)
+            self.right_can_entry.config(state=tk.DISABLED)
+
+            self.status_label.config(text=f"Status: Right hand activated on {self.right_can_interface}")
+
+        except Exception as e:
+            self.status_label.config(text=f"Status: Error activating right hand - {str(e)}")
+            self._right_hand_instance = None
+            self.right_active = False
+
+    def deactivate_right_hand(self):
+        """Deactivate right hand - close hardware connection."""
+        if not self.right_active:
+            return
+
+        if self._right_hand_instance:
+            try:
+                self._right_hand_instance.close_can()
+            except Exception:
+                pass
+            self._right_hand_instance = None
+
+        self.right_active = False
+        self.right_activate_button.config(state=tk.NORMAL)
+        self.right_deactivate_button.config(state=tk.DISABLED)
+        self.right_can_entry.config(state=tk.NORMAL)
+        self.status_label.config(text="Status: Right hand deactivated")
+
     def start_controller(self):
-        """Start the hand controller."""
+        """Start the hand controller (ZMQ listener only)."""
         if self.running:
+            return
+
+        # Check if at least one hand is activated
+        if not self.left_active and not self.right_active:
+            self.status_label.config(
+                text="Status: Error - Please activate at least one hand first"
+            )
             return
 
         # Start control thread
@@ -777,36 +1044,70 @@ class L20ControllerGUI:
         self.status_label.config(text="Status: Stopped")
 
     def calibrate_min(self):
-        """Calibrate minimum values with current angles."""
-        if self.current_angles:
-            self.calibration.calibrate_min(self.current_angles)
-            self.status_label.config(text="Status: MIN calibration captured!")
-            self.update_angles_display()
+        """Calibrate minimum values (shared across both hands)."""
+        combined_angles = {}
+
+        if self.left_active and self.left_current_angles:
+            combined_angles.update(self.left_current_angles)
+
+        if self.right_active and self.right_current_angles:
+            combined_angles.update(self.right_current_angles)
+
+        if combined_angles:
+            self.calibration.calibrate_min(combined_angles)
+            self.status_label.config(text="Status: MIN calibration captured (shared)!")
+
+            # Update both displays
+            if self.left_active:
+                self.root.after(0, lambda: self.update_angles_display("left"))
+            if self.right_active:
+                self.root.after(0, lambda: self.update_angles_display("right"))
+
             self.root.after(2000, lambda: self.status_label.config(
-                text="Status: Running - Listening on tcp://localhost:5557"
+                text="Status: Running"
             ))
 
     def calibrate_max(self):
-        """Calibrate maximum values with current angles."""
-        if self.current_angles:
-            self.calibration.calibrate_max(self.current_angles)
-            self.status_label.config(text="Status: MAX calibration captured!")
-            self.update_angles_display()
+        """Calibrate maximum values (shared across both hands)."""
+        combined_angles = {}
+
+        if self.left_active and self.left_current_angles:
+            combined_angles.update(self.left_current_angles)
+
+        if self.right_active and self.right_current_angles:
+            combined_angles.update(self.right_current_angles)
+
+        if combined_angles:
+            self.calibration.calibrate_max(combined_angles)
+            self.status_label.config(text="Status: MAX calibration captured (shared)!")
+
+            # Update both displays
+            if self.left_active:
+                self.root.after(0, lambda: self.update_angles_display("left"))
+            if self.right_active:
+                self.root.after(0, lambda: self.update_angles_display("right"))
+
             self.root.after(2000, lambda: self.status_label.config(
-                text="Status: Running - Listening on tcp://localhost:5557"
+                text="Status: Running"
             ))
 
     def reset_calibration(self):
         """Reset calibration to defaults."""
         self.calibration = CalibrationData()
         self.status_label.config(text="Status: Calibration reset to defaults")
-        self.update_angles_display()
+
+        # Update both displays
+        if self.left_active:
+            self.update_angles_display("left")
+        if self.right_active:
+            self.update_angles_display("right")
+
         self.root.after(2000, lambda: self.status_label.config(
-            text="Status: Ready" if not self.running else
-                 "Status: Running - Listening on tcp://localhost:5557"
+            text="Status: Ready" if not self.running else "Status: Running"
         ))
 
-    def _merge_poses(self, new_pose: List[int]) -> List[int]:
+    def _merge_poses(self, new_pose: List[int], last_sent_pose: List[int],
+                     motor_enabled: Dict[str, bool]) -> List[int]:
         """
         Merge new pose with last sent pose based on enabled motors.
 
@@ -815,16 +1116,18 @@ class L20ControllerGUI:
 
         Args:
             new_pose: The newly calculated pose (20 motor values)
+            last_sent_pose: The last pose sent to hardware
+            motor_enabled: Dictionary of enabled/disabled motors for this hand
 
         Returns:
             Merged pose with enabled motors updated, disabled motors preserved
         """
         # Start with a copy of the last sent pose
-        merged_pose = self.last_sent_pose.copy()
+        merged_pose = last_sent_pose.copy()
 
         # Update pose index for each enabled motor (1:1 mapping)
         for motor_name in self.calibration.motor_names:
-            if self.motor_enabled.get(motor_name, True):
+            if motor_enabled.get(motor_name, True):
                 # This motor is enabled, update its pose value
                 motor_idx = self._get_pose_index_for_motor(motor_name)
                 merged_pose[motor_idx] = new_pose[motor_idx]
@@ -832,9 +1135,8 @@ class L20ControllerGUI:
         return merged_pose
 
     def _control_loop(self):
-        """Main control loop running in separate thread."""
+        """Main control loop running in separate thread - processes both hands."""
         zmq_socket = None
-        hand = None
 
         try:
             # Initialize ZMQ socket
@@ -844,16 +1146,16 @@ class L20ControllerGUI:
             zmq_socket.setsockopt(zmq.SUBSCRIBE, b"")
             zmq_socket.RCVTIMEO = 500
 
-            # Initialize hand
-            hand = LinkerHandApi(hand_type="left", hand_joint="L20")
-            hand.set_speed([255, 255, 255, 255, 255])
+            # Update status to show active hands
+            active_hands = []
+            if self.left_active:
+                active_hands.append("Left")
+            if self.right_active:
+                active_hands.append("Right")
 
-            # Store hand instance for preset commands
-            self._hand_instance = hand
-
-            # Update status to success
+            hands_str = " + ".join(active_hands)
             self.root.after(0, lambda: self.status_label.config(
-                text="Status: Running - Listening on tcp://localhost:5557"
+                text=f"Status: Running - {hands_str} hand(s) active - Listening on tcp://localhost:5557"
             ))
 
             while self.running:
@@ -865,49 +1167,93 @@ class L20ControllerGUI:
                 except zmq.ZMQError:
                     continue
 
-                # Parse and calculate angles
+                # Parse and calculate angles for BOTH hands
                 try:
-                    landmarks = parse_landmarks(message)
-                    raw_angles = calculate_all_joint_angles(landmarks)
+                    # Parse both left and right landmarks
+                    from l20_controller import parse_landmarks_dual
+                    left_landmarks, right_landmarks = parse_landmarks_dual(message)
 
-                    try:
-                        self.debug_data = calculate_middle_mcp_flexion_debug(landmarks)
-                        self.root.after(0, self.update_debug_display)
-                    except Exception:
-                        pass
+                    # === PROCESS LEFT HAND ===
+                    if self.left_active and left_landmarks:
+                        try:
+                            raw_angles = calculate_all_joint_angles(left_landmarks)
+                            motor_angles = self._calculate_motor_angles(raw_angles)
 
-                    # Convert to motor angles
-                    motor_angles = self._calculate_motor_angles(raw_angles)
+                            # Store for display and calibration
+                            self.left_current_angles = motor_angles
 
-                    # Store for display and calibration
-                    self.current_angles = motor_angles
+                            # Calculate new pose using calibrated values
+                            new_pose = [0] * 20
+                            for motor_name in self.calibration.motor_names:
+                                angle = motor_angles.get(motor_name, 0.0)
+                                motor_val = self.calibration.get_motor_value(motor_name, angle)
+                                motor_idx = self._get_pose_index_for_motor(motor_name)
+                                new_pose[motor_idx] = motor_val
 
-                    # Calculate new pose using calibrated values
-                    new_pose = [0] * 20
-                    for motor_name in self.calibration.motor_names:
-                        angle = motor_angles.get(motor_name, 0.0)
-                        motor_val = self.calibration.get_motor_value(motor_name, angle)
-                        motor_idx = self._get_pose_index_for_motor(motor_name)
-                        new_pose[motor_idx] = motor_val
+                            # Merge with last sent pose based on enabled joints
+                            self.left_current_pose = self._merge_poses(
+                                new_pose, self.left_last_sent_pose, self.left_motor_enabled
+                            )
 
-                    # Merge with last sent pose based on enabled joints
-                    self.current_pose = self._merge_poses(new_pose)
+                            # Update last sent pose
+                            self.left_last_sent_pose = self.left_current_pose.copy()
 
-                    # Update last sent pose
-                    self.last_sent_pose = self.current_pose.copy()
+                            # Send to left hand hardware
+                            if self._left_hand_instance:
+                                self._left_hand_instance.finger_move(pose=self.left_current_pose)
 
-                    # Update display (in main thread)
-                    self.root.after(0, self.update_angles_display)
+                            # Update display (in main thread)
+                            self.root.after(0, lambda: self.update_angles_display("left"))
 
-                    # Update status if it was previously showing "No hand"
-                    if "No hand" in self.status_label.cget("text"):
-                         self.root.after(0, lambda: self.status_label.config(
-                            text="Status: Running - Listening on tcp://localhost:5557"
-                        ))
+                        except Exception as e:
+                            print(f"Left hand processing error: {e}")
+
+                    # === PROCESS RIGHT HAND ===
+                    if self.right_active and right_landmarks:
+                        try:
+                            raw_angles = calculate_all_joint_angles(right_landmarks)
+                            motor_angles = self._calculate_motor_angles(raw_angles)
+
+                            # Store for display and calibration
+                            self.right_current_angles = motor_angles
+
+                            # Calculate new pose using calibrated values
+                            new_pose = [0] * 20
+                            for motor_name in self.calibration.motor_names:
+                                angle = motor_angles.get(motor_name, 0.0)
+                                motor_val = self.calibration.get_motor_value(motor_name, angle)
+                                motor_idx = self._get_pose_index_for_motor(motor_name)
+                                new_pose[motor_idx] = motor_val
+
+                            # Merge with last sent pose based on enabled joints
+                            self.right_current_pose = self._merge_poses(
+                                new_pose, self.right_last_sent_pose, self.right_motor_enabled
+                            )
+
+                            # Update last sent pose
+                            self.right_last_sent_pose = self.right_current_pose.copy()
+
+                            # Send to right hand hardware
+                            if self._right_hand_instance:
+                                self._right_hand_instance.finger_move(pose=self.right_current_pose)
+
+                            # Update display (in main thread)
+                            self.root.after(0, lambda: self.update_angles_display("right"))
+
+                        except Exception as e:
+                            print(f"Right hand processing error: {e}")
+
+                    # Update debug display (using left hand for now)
+                    if left_landmarks:
+                        try:
+                            self.debug_data = calculate_middle_mcp_flexion_debug(left_landmarks)
+                            self.root.after(0, self.update_debug_display)
+                        except Exception:
+                            pass
 
                 except ValueError as e:
                     if "No hand landmarks detected" in str(e):
-                        # Update status to indicate no hand seen (throttle UI updates if needed, but simple string check is fast)
+                        # Update status to indicate no hand seen
                         self.root.after(0, lambda: self.status_label.config(
                             text="Status: Connected - No hand detected"
                         ))
@@ -915,16 +1261,9 @@ class L20ControllerGUI:
                     else:
                         print(f"Parse error: {e}")
                         continue
-                except Exception as e:  # noqa: BLE001
+                except Exception as e:
                     print(f"Parse error: {e}")
                     continue
-
-                # Send to hand
-                try:
-                    if hand:
-                        hand.finger_move(pose=self.current_pose)
-                except Exception as e:  # noqa: BLE001
-                    print(f"Hand control error: {e}")
 
                 time.sleep(0.02)  # ~50Hz
 
@@ -939,16 +1278,7 @@ class L20ControllerGUI:
             self.root.after(0, lambda: self.stop_button.config(state=tk.DISABLED))
 
         finally:
-            # Clear hand instance reference
-            self._hand_instance = None
-
-            # Cleanup resources
-            if hand:
-                try:
-                    hand.close_can()
-                except Exception:
-                    pass
-
+            # Cleanup ZMQ socket (hands remain active)
             if zmq_socket:
                 try:
                     zmq_socket.close()
@@ -957,7 +1287,17 @@ class L20ControllerGUI:
 
     def on_closing(self):
         """Handle window close event."""
+        # Stop controller first
         self.stop_controller()
+
+        # Deactivate both hands (closes hardware connections)
+        if self.left_active:
+            self.deactivate_left_hand()
+
+        if self.right_active:
+            self.deactivate_right_hand()
+
+        # Destroy window
         self.root.destroy()
 
 
