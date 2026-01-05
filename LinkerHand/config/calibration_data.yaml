@@ -15,6 +15,7 @@ max_motor_values:
   ring_base: 0
   ring_spread: 0
   ring_tip: 0
+  thumb_abduction: 0
   thumb_base: 40
   thumb_tip: 135
   thumb_yaw: 19
