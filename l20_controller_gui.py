@@ -1572,8 +1572,8 @@ class L20ControllerGUI:
             zmq_socket.RCVTIMEO = 500
 
             # Initialize hand
-            hand = LinkerHandApi(hand_type="left", hand_joint="L20")
-            hand.set_speed([255, 255, 255, 255, 255])
+            hand = LinkerHandApi(hand_type="right", hand_joint="G20")
+            hand.set_speed([30, 30, 30, 30, 30])
 
             # Store hand instance for preset commands
             self._hand_instance = hand
