@@ -34,9 +34,9 @@ def parse_landmarks(message: str) -> List[Tuple[float, float, float]]:
     if not isinstance(payload, dict):
         raise ValueError("Expected dict with 'left'/'right' keys")
 
-    landmarks = payload.get("left") or payload.get("right") or []
+    landmarks = payload.get("right") or []
     if not landmarks:
-        raise ValueError("No hand landmarks detected")
+        raise ValueError("No right hand landmarks detected")
 
     coords: List[Tuple[float, float, float]] = []
     for entry in landmarks:
