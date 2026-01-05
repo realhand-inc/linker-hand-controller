@@ -1,84 +1,83 @@
 max_motor_values:
   index_base: 0
-  index_spread: 255
+  index_spread: 10
   index_tip: 0
   middle_base: 0
-  middle_spread: 255
+  middle_spread: 100
   middle_tip: 0
   pinky_base: 0
-  pinky_spread: 0
+  pinky_spread: 240
   pinky_tip: 0
   reserved_11: 255
   reserved_12: 255
   reserved_13: 255
   reserved_14: 255
   ring_base: 0
-  ring_spread: 0
+  ring_spread: 180
   ring_tip: 0
-  thumb_abduction: 0
   thumb_base: 40
   thumb_tip: 135
   thumb_yaw: 19
 max_values:
-  index_base: 0.9289519996010742
-  index_spread: 0.7238736536607291
-  index_tip: 0.891066354767656
-  middle_base: 1.180481447932848
-  middle_spread: 0.7358775740938408
-  middle_tip: 1.251982979372654
-  pinky_base: 1.2600613095076092
-  pinky_spread: 0.8465459428187088
-  pinky_tip: 1.5585287721369385
+  index_base: 0.9140572428887977
+  index_spread: 0.19476387512807924
+  index_tip: 0.8866593140438481
+  middle_base: 1.1419442789081038
+  middle_spread: 0.19476387512807924
+  middle_tip: 1.245026282047843
+  pinky_base: 1.2062137485233237
+  pinky_spread: 0.19476387512807924
+  pinky_tip: 1.526949309140029
   reserved_11: 0.0
   reserved_12: 0.0
   reserved_13: 0.0
   reserved_14: 0.0
-  ring_base: 1.4020742250938736
-  ring_spread: 0.8465459428187088
-  ring_tip: 1.4364185305943817
-  thumb_base: 2.8735804537950833
-  thumb_tip: 2.031456244435562
-  thumb_yaw: 0.0589142517034849
+  ring_base: 1.3269773973260928
+  ring_spread: 0.19476387512807924
+  ring_tip: 1.383484239014747
+  thumb_base: 2.9045025118654997
+  thumb_tip: 2.4263389159426234
+  thumb_yaw: 0.057934130527394004
 min_motor_values:
   index_base: 255
-  index_spread: 0
+  index_spread: 10
   index_tip: 255
   middle_base: 255
-  middle_spread: 0
+  middle_spread: 100
   middle_tip: 255
   pinky_base: 255
-  pinky_spread: 255
+  pinky_spread: 240
   pinky_tip: 255
   reserved_11: 255
   reserved_12: 255
   reserved_13: 255
   reserved_14: 255
   ring_base: 255
-  ring_spread: 255
+  ring_spread: 180
   ring_tip: 255
   thumb_base: 255
   thumb_tip: 255
   thumb_yaw: 245
 min_values:
-  index_base: 0.12543060218773805
-  index_spread: 0.16898718895839943
-  index_tip: 3.141592653589793
-  middle_base: 0.12265683174970636
-  middle_spread: 0.18315667333194424
-  middle_tip: 3.1347931835184055
-  pinky_base: 0.015671988041938065
-  pinky_spread: 0.2557033245166254
-  pinky_tip: 3.0559547639799476
+  index_base: 0.061893193187306045
+  index_spread: 0.18316306165022336
+  index_tip: 3.0378220605383097
+  middle_base: 0.07240331388165287
+  middle_spread: 0.1885052535182907
+  middle_tip: 3.0168403173736302
+  pinky_base: 0.08828767226068387
+  pinky_spread: 0.2717695536196583
+  pinky_tip: 3.0066885354229287
   reserved_11: 0.0
   reserved_12: 0.0
   reserved_13: 0.0
   reserved_14: 0.0
-  ring_base: 0.10617134859056328
-  ring_spread: 0.18315667333194424
-  ring_tip: 3.141592653589793
-  thumb_base: 3.009478863514875
-  thumb_tip: 3.1070951091372967
-  thumb_yaw: 0.03180526925987035
+  ring_base: 0.06470118355593651
+  ring_spread: 0.1885052535182907
+  ring_tip: 3.0952684466440434
+  thumb_base: 2.979966593393191
+  thumb_tip: 3.0928095816953056
+  thumb_yaw: 0.031502911009702386
 thumb_abd_calibration_points:
 - angle: 2.103835359154958
   motor: 79

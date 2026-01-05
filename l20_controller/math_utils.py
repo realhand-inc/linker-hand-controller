@@ -65,6 +65,8 @@ def palm_plane_normal(
     index_minus_pinky = vector_subtract(index_mcp, pinky_mcp)
     return vector_normalize(vector_cross(middle_minus_wrist, index_minus_pinky))
 
+    # normal = vector_normalize(vector_cross(middle_minus_wrist, index_minus_pinky))
+    # return (-normal[0], -normal[1], -normal[2])
 
 def signed_angle_in_plane(v1: Sequence[float], v2: Sequence[float], plane_normal: Sequence[float]) -> float:
     """

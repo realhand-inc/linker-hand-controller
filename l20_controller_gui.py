@@ -305,6 +305,18 @@ class L20ControllerGUI:
         self.root.title("L20 Hand Controller - Calibration Interface")
         self.root.geometry("1800x1200")
 
+        self.spread_override_defaults = {
+            "index_spread": 220,
+            "middle_spread": 150,
+            "ring_spread": 80,
+            "pinky_spread": 10,
+        }
+        self.spread_override_vars = {
+            name: tk.StringVar(value=str(value))
+            for name, value in self.spread_override_defaults.items()
+        }
+        self.spread_override_values = self.spread_override_defaults.copy()
+
         self.calibration = CalibrationData()
 
         # Try to load saved calibration
@@ -330,9 +342,10 @@ class L20ControllerGUI:
         # Preset gesture poses
         self.preset_poses = {
             "握拳": [40, 0, 0, 0, 0, 131, 10, 100, 180, 240, 19, 255, 255, 255, 255, 135, 0, 0, 0, 0],
-            "张开": [255, 255, 255, 255, 255, 255, 10, 100, 180, 240, 245, 255, 255, 255, 255, 255, 255, 255, 255, 255],
+            "张开": [255, 255, 255, 255, 255, 255, 10, 100, 140, 255, 245, 255, 255, 255, 255, 255, 255, 255, 255, 255],
             "OK": [191, 95, 255, 255, 255, 136, 107, 100, 180, 240, 72, 255, 255, 255, 255, 116, 99, 255, 255, 255],
             "点赞": [255, 0, 0, 0, 0, 127, 10, 100, 180, 240, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0],
+            "Yeah": [255, 255, 255, 255, 255, 150, 255, 0, 140, 255, 245, 255, 255, 255, 255, 255, 255, 255, 255, 255],
         }
         self._apply_preset_motor_limits()
 
@@ -470,6 +483,27 @@ class L20ControllerGUI:
                                            command=self.reset_calibration, width=20)
         self.reset_cal_button.grid(row=0, column=8, padx=5)
 
+        spread_frame = ttk.LabelFrame(control_frame, text="Spread Override (index -> pinky, 0-255)")
+        spread_frame.grid(row=1, column=0, columnspan=9, sticky=(tk.W, tk.E), pady=(10, 0))
+
+        labels = [
+            ("Index", "index_spread"),
+            ("Middle", "middle_spread"),
+            ("Ring", "ring_spread"),
+            ("Pinky", "pinky_spread"),
+        ]
+        for col, (label, motor_name) in enumerate(labels):
+            ttk.Label(spread_frame, text=f"{label}:").grid(row=0, column=col * 2, padx=(0, 4))
+            ttk.Entry(
+                spread_frame, width=6, textvariable=self.spread_override_vars[motor_name]
+            ).grid(row=0, column=col * 2 + 1, padx=(0, 12))
+
+        self.apply_spread_button = ttk.Button(
+            spread_frame, text="Apply Spread Overrides",
+            command=self.apply_spread_overrides, width=24
+        )
+        self.apply_spread_button.grid(row=0, column=8, padx=(0, 4))
+
     def _create_angles_display(self, parent: ttk.Frame):
         """Create joint angles display table."""
         display_frame = ttk.LabelFrame(parent, text="Joint Angles", padding="10")
@@ -565,6 +599,10 @@ class L20ControllerGUI:
         self.preset_thumbsup_button = ttk.Button(button_frame, text="点赞 (Thumbs Up)",
                                                  command=lambda: self.apply_preset("点赞"), width=15)
         self.preset_thumbsup_button.grid(row=3, column=1, padx=5, pady=2)
+
+        self.preset_yeah_button = ttk.Button(button_frame, text="Yeah",
+                                             command=lambda: self.apply_preset("Yeah"), width=15)
+        self.preset_yeah_button.grid(row=4, column=0, padx=5, pady=2)
 
         # Populate joint names
         self._populate_joint_tree()
@@ -970,6 +1008,8 @@ class L20ControllerGUI:
         # Update the motor position in last_sent_pose and current_pose
         self.last_sent_pose[motor_idx] = motor_value
         self.current_pose[motor_idx] = motor_value
+        self._apply_spread_overrides_to_pose(self.last_sent_pose)
+        self._apply_spread_overrides_to_pose(self.current_pose)
 
         # Send the updated pose
         try:
@@ -1161,7 +1201,9 @@ class L20ControllerGUI:
         if gesture_name not in self.preset_poses:
             return
 
-        preset_pose = self.preset_poses[gesture_name]
+        preset_pose = self._apply_spread_overrides_to_pose(
+            self.preset_poses[gesture_name].copy()
+        )
 
         # Send preset pose to hand if controller is running
         if self.running and self._hand_instance:
@@ -1175,8 +1217,8 @@ class L20ControllerGUI:
             return
 
         # Update last sent pose and current pose
-        self.last_sent_pose = preset_pose.copy()
-        self.current_pose = preset_pose.copy()
+            self.last_sent_pose = preset_pose.copy()
+            self.current_pose = preset_pose.copy()
 
         # Deactivate all joints to pause MediaPipe tracking
         self.deactivate_all_joints()
@@ -1441,12 +1483,14 @@ class L20ControllerGUI:
                 motor_idx = self._get_pose_index_for_motor('thumb_abduction')
                 temp_pose = self.last_sent_pose.copy()
                 temp_pose[motor_idx] = motor_value
+                temp_pose = self._apply_spread_overrides_to_pose(temp_pose)
 
                 # Send to hand
                 self._hand_instance.finger_move(pose=temp_pose)
 
                 # Update last_sent_pose so other motors maintain their position
                 self.last_sent_pose[motor_idx] = motor_value
+                self._apply_spread_overrides_to_pose(self.last_sent_pose)
             except Exception as e:
                 print(f"Error sending slider motor command: {e}")
 
@@ -1546,6 +1590,49 @@ class L20ControllerGUI:
         fist_pose = self.preset_poses.get("握拳")
         if open_pose and fist_pose:
             self.calibration.set_motor_limits_from_pose(open_pose, fist_pose)
+
+    def apply_spread_overrides(self):
+        """Apply spread override inputs (0-255) to always-send values."""
+        updated = {}
+        invalid = []
+        for name, var in self.spread_override_vars.items():
+            value = self._coerce_spread_override_value(var.get())
+            if value is None:
+                invalid.append(name)
+                continue
+            updated[name] = value
+
+        if updated:
+            self.spread_override_values.update(updated)
+            for name, value in updated.items():
+                self.spread_override_vars[name].set(str(value))
+
+        if invalid:
+            invalid_list = ", ".join(invalid)
+            self.status_label.config(
+                text=f"Status: Invalid spread override for {invalid_list} (use 0-255)"
+            )
+        else:
+            self.status_label.config(text="Status: Spread overrides updated")
+
+        self.root.after(2000, lambda: self.status_label.config(
+            text="Status: Running - Listening on tcp://localhost:5557" if self.running else "Status: Ready"
+        ))
+
+    def _coerce_spread_override_value(self, value: str) -> Optional[int]:
+        """Parse and clamp a spread override entry to 0-255."""
+        try:
+            parsed = int(float(value))
+        except (TypeError, ValueError):
+            return None
+        return max(0, min(255, parsed))
+
+    def _apply_spread_overrides_to_pose(self, pose: List[int]) -> List[int]:
+        """Force four finger spread joints to override values."""
+        for motor_name in self._four_finger_spread_names():
+            motor_idx = self._get_pose_index_for_motor(motor_name)
+            pose[motor_idx] = self.spread_override_values.get(motor_name, pose[motor_idx])
+        return pose
 
     def _merge_poses(self, new_pose: List[int]) -> List[int]:
         """
@@ -1658,6 +1745,7 @@ class L20ControllerGUI:
 
                     # Merge with last sent pose based on enabled joints
                     self.current_pose = self._merge_poses(smoothed_pose)
+                    self._apply_spread_overrides_to_pose(self.current_pose)
 
                     # Update last sent pose
                     self.last_sent_pose = self.current_pose.copy()

@@ -252,8 +252,8 @@ def calculate_finger_spread(
     v_spread_norm = vector_normalize(v_spread_proj)
     v_ref_norm = vector_normalize(v_ref_proj)
 
-    dot = max(-1.0, min(1.0, vector_dot(v_spread_norm, v_ref_norm)))
-    return math.acos(dot)
+    dot = max(-1.0, min(1.0, vector_dot(v_ref_norm, v_spread_norm)))
+    return 1
 
 
 def calculate_finger_pip_flexion(
@@ -321,6 +321,7 @@ def calculate_finger_dip_flexion(
 
     # Calculate bending angle
     angle = signed_angle_in_plane(vec2, vec1, rotation_axis)
+    angle = -angle
 
     return math.pi - max(0.0, min(math.pi, angle))
 
