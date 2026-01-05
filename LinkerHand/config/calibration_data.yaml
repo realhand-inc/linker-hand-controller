@@ -19,25 +19,25 @@ max_motor_values:
   thumb_tip: 135
   thumb_yaw: 19
 max_values:
-  index_base: 0.9660200560073742
-  index_spread: 0.18356244743218972
-  index_tip: 1.5393430129378278
-  middle_base: 1.009815975927062
-  middle_spread: 0.18356244743218972
-  middle_tip: 1.378008030150713
-  pinky_base: 0.8627685469258514
-  pinky_spread: 0.5275458660795554
-  pinky_tip: 1.4961566278442728
+  index_base: 1.0527430522836936
+  index_spread: 0.0648627367828065
+  index_tip: 1.178682732146978
+  middle_base: 1.3308435307158921
+  middle_spread: 0.0648627367828065
+  middle_tip: 1.3298970081542418
+  pinky_base: 1.3788292513705676
+  pinky_spread: 0.1287467538349383
+  pinky_tip: 1.52572276415096
   reserved_11: 0.0
   reserved_12: 0.0
   reserved_13: 0.0
   reserved_14: 0.0
-  ring_base: 1.0532778002662566
-  ring_spread: 0.18356244743218972
-  ring_tip: 1.3579344915056117
-  thumb_base: 2.588498682766385
-  thumb_tip: 2.9338314678138873
-  thumb_yaw: 0.046547927188034285
+  ring_base: 1.4646472732730222
+  ring_spread: 0.08305238426863917
+  ring_tip: 1.3914112550598152
+  thumb_base: 2.684515348770163
+  thumb_tip: 2.349059061644045
+  thumb_yaw: 0.05447104529767223
 min_motor_values:
   index_base: 255
   index_spread: 10
@@ -59,25 +59,25 @@ min_motor_values:
   thumb_tip: 255
   thumb_yaw: 245
 min_values:
-  index_base: 0.06609696796523809
-  index_spread: 0.18356244743218972
+  index_base: 0.03422137716583385
+  index_spread: 0.023002494609142252
   index_tip: 3.141592653589793
-  middle_base: 0.003497028555026217
-  middle_spread: 0.18356244743218972
+  middle_base: 0.09663954025334273
+  middle_spread: 0.12454519102359468
   middle_tip: 3.141592653589793
-  pinky_base: 0.048222042979361425
-  pinky_spread: 0.5275458660795554
+  pinky_base: 0.11350400095079545
+  pinky_spread: 0.3428002696049946
   pinky_tip: 3.141592653589793
   reserved_11: 0.0
   reserved_12: 0.0
   reserved_13: 0.0
   reserved_14: 0.0
-  ring_base: 0.02437476126438041
-  ring_spread: 0.18356244743218972
+  ring_base: 0.11182044631510024
+  ring_spread: 0.19533058922531757
   ring_tip: 3.141592653589793
-  thumb_base: 2.912886982795279
-  thumb_tip: 3.0167690977806427
-  thumb_yaw: 0.03260324081954651
+  thumb_base: 2.784724583167984
+  thumb_tip: 3.0650341656988402
+  thumb_yaw: 0.04272451229092081
 thumb_abd_calibration_points:
 - angle: 2.103835359154958
   motor: 79
