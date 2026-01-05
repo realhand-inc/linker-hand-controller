@@ -1078,14 +1078,19 @@ class L20ControllerGUI:
                     pass
 
     def activate_all_joints(self):
-        """Enable all motors."""
+        """Enable all motors except the four finger spread joints."""
+        four_finger_spreads = set(self._four_finger_spread_names())
         for motor_name in self.calibration.motor_names:
-            self.motor_enabled[motor_name] = True
+            if motor_name in four_finger_spreads:
+                # Always keep four finger spread joints disabled
+                self.motor_enabled[motor_name] = False
+            else:
+                self.motor_enabled[motor_name] = True
         self._update_tree_enabled_display()
 
         # Update status to indicate tracking resumed
         if self.running:
-            self.status_label.config(text="Status: Running - MediaPipe tracking resumed")
+            self.status_label.config(text="Status: Running - MediaPipe tracking resumed (4 finger spreads disabled)")
 
     def deactivate_all_joints(self):
         """Disable all motors."""
@@ -1129,6 +1134,15 @@ class L20ControllerGUI:
     def _spread_joint_names(self) -> List[str]:
         return [
             'thumb_abduction',
+            'index_spread',
+            'middle_spread',
+            'ring_spread',
+            'pinky_spread',
+        ]
+
+    def _four_finger_spread_names(self) -> List[str]:
+        """Return only the four finger spread joints (excluding thumb)."""
+        return [
             'index_spread',
             'middle_spread',
             'ring_spread',
@@ -1252,6 +1266,10 @@ class L20ControllerGUI:
 
         # Ensure joints are deactivated on start
         self.deactivate_all_joints()
+
+        # Always ensure four finger spread joints are disabled
+        for motor_name in self._four_finger_spread_names():
+            self.motor_enabled[motor_name] = False
 
         # Start control thread
         self.running = True
@@ -1633,6 +1651,10 @@ class L20ControllerGUI:
                         else:
                             smoothed_pose[motor_idx] = self.last_sent_pose[motor_idx]
                     self.smoothed_pose = smoothed_pose
+
+                    # Ensure four finger spread joints are always disabled
+                    for motor_name in self._four_finger_spread_names():
+                        self.motor_enabled[motor_name] = False
 
                     # Merge with last sent pose based on enabled joints
                     self.current_pose = self._merge_poses(smoothed_pose)
